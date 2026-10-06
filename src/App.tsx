@@ -837,6 +837,9 @@ export default function App() {
   const handleFinishTurn = () => {
     if (!ws || ws.readyState !== WebSocket.OPEN || !isMyTurn) return;
 
+    // Filter out any draw placeholder tiles before validation/submission
+    const cleanRack = localRack.filter(t => !t.id.startsWith('drawing_placeholder_'));
+
     // Bug fix: validate all sets have >= 3 tiles and are valid before ending turn
     const invalidSets = localBoard.filter((s) => s.tiles.length > 0 && s.tiles.length < 3);
     if (invalidSets.length > 0) {
@@ -851,7 +854,7 @@ export default function App() {
         roomId: gameState?.roomId,
         playerId: myPlayerId,
         board: localBoard,
-        rack: localRack,
+        rack: cleanRack,
       })
     );
   };
@@ -865,6 +868,17 @@ export default function App() {
     setTimeout(() => {
       setIsDrawingAnimation(false);
     }, 650);
+
+    // Optimistic UI: add a face-down placeholder tile immediately so the rack
+    // count updates before the server round-trip completes.
+    // The real tile arrives with the next ROOM_STATE and replaces this.
+    const placeholder: Tile = {
+      id: `drawing_placeholder_${Date.now()}`,
+      color: 'black',
+      number: 0,
+      isJoker: false,
+    };
+    setLocalRack((prev) => [...prev, placeholder]);
 
     ws.send(
       JSON.stringify({

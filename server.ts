@@ -18,6 +18,7 @@ import {
   calculateHandPenaltyPoints,
   calculateInitialMeldPoints,
 } from './src/utils/rummikubRules.js';
+import { geminiBotMove } from './server/geminiBot.js';
 import {
   sanitizeText,
   validateRoomCode,
@@ -229,17 +230,24 @@ function advanceToNextTurn(room: ServerRoom) {
   startTurnTimer(room);
 }
 
-function handleBotTurn(room: ServerRoom) {
+async function handleBotTurn(room: ServerRoom) {
   if (room.status !== 'playing') return;
   const bot = room.players[room.currentTurnIndex];
   if (!bot || !bot.isBot) return;
 
-  const result = botFindMove(
+  const result = await geminiBotMove(
     bot.rack,
     room.board,
     bot.hasInitialMeld,
-    room.settings.minInitialMeld
+    room.settings.minInitialMeld,
+    room.pool.length,
+    bot.name,
   );
+
+  // Guard: room may have ended while we awaited Gemini
+  if (room.status !== 'playing') return;
+
+  console.log(`[bot:${bot.name}] move source=${result.source} action=${result.action}`);
 
   if (result.action === 'play' && result.newBoard && result.newRack) {
     room.board = result.newBoard;

@@ -505,6 +505,85 @@ export function calculateHandPenaltyPoints(rack: Tile[]): number {
 }
 
 /**
+ * Enumerate all distinct legal moves for the bot (used by Gemini candidate-list mode).
+ * Returns up to ~10 candidates: all single-tile-to-existing-set plays, all new sets
+ * from rack, and a draw option. Each candidate is already validated.
+ */
+export function findCandidateMoves(
+  rack: Tile[],
+  board: TileSet[],
+  hasInitialMeld: boolean,
+  minInitialMeld: number,
+): Array<{ action: 'play' | 'draw'; newBoard?: TileSet[]; newRack?: Tile[] }> {
+  const candidates: Array<{ action: 'play' | 'draw'; newBoard?: TileSet[]; newRack?: Tile[] }> = [];
+  const seenKeys = new Set<string>();
+
+  function addPlay(newBoard: TileSet[], newRack: Tile[]) {
+    // Deduplicate by the set of played tile IDs
+    const key = rack.filter(t => !newRack.find(r => r.id === t.id)).map(t => t.id).sort().join(',');
+    if (seenKeys.has(key)) return;
+    seenKeys.add(key);
+    candidates.push({ action: 'play', newBoard, newRack });
+  }
+
+  if (hasInitialMeld) {
+    // 1. Add single tile to an existing board set
+    for (const handTile of rack) {
+      for (let si = 0; si < board.length; si++) {
+        const set = board[si];
+        for (const candidate of [[handTile, ...set.tiles], [...set.tiles, handTile]]) {
+          const val = validateSet(candidate);
+          if (val.valid) {
+            const newBoard = board.map((s, i) =>
+              i === si ? { ...s, tiles: val.sortedTiles || candidate } : s
+            );
+            addPlay(newBoard, rack.filter(t => t.id !== handTile.id));
+            break;
+          }
+        }
+      }
+    }
+
+    // 2. New sets from rack
+    const newSets = findIndependentSetsFromRack(rack);
+    for (const s of newSets) {
+      const playIds = new Set(s.tiles.map(t => t.id));
+      const newRack = rack.filter(t => !playIds.has(t.id));
+      const newBoard = [...board, { id: `cand_${Date.now()}_${Math.random().toString(36).slice(2,5)}`, tiles: s.tiles }];
+      addPlay(newBoard, newRack);
+      if (candidates.length >= 10) break;
+    }
+  } else {
+    // Initial meld: only new sets from rack that meet the point threshold
+    const newSets = findIndependentSetsFromRack(rack);
+    if (newSets.length > 0) {
+      let sum = 0;
+      const setsToPlay: Tile[][] = [];
+      const usedIds = new Set<string>();
+      for (const s of newSets) {
+        if (s.tiles.some(t => usedIds.has(t.id))) continue;
+        setsToPlay.push(s.tiles);
+        sum += s.points;
+        s.tiles.forEach(t => usedIds.add(t.id));
+        if (sum >= minInitialMeld) break;
+      }
+      if (sum >= minInitialMeld) {
+        const newRack = rack.filter(t => !usedIds.has(t.id));
+        const newBoard = [
+          ...board,
+          ...setsToPlay.map((tiles, i) => ({ id: `cand_init_${i}`, tiles })),
+        ];
+        addPlay(newBoard, newRack);
+      }
+    }
+  }
+
+  // Always include draw as last option
+  candidates.push({ action: 'draw' });
+  return candidates;
+}
+
+/**
  * Basic AI Bot Turn solver
  */
 export function botFindMove(
