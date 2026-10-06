@@ -1,0 +1,187 @@
+@import "tailwindcss";
+
+@layer base {
+  html, body, #root {
+    height: 100%;
+    max-height: 100vh;
+    overflow: hidden;
+    margin: 0;
+    padding: 0;
+  }
+
+  body {
+    background-color: #0b1510;
+    color: #f1f5f9;
+    font-family: 'Assistant', -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    user-select: none;
+    -webkit-user-select: none;
+  }
+}
+
+/* Luxury Green Felt Table Background */
+.rummikub-table {
+  background: radial-gradient(circle at 50% 45%, #185a37 0%, #114227 45%, #0a2917 80%, #06190e 100%);
+  box-shadow: inset 0 0 100px rgba(0, 0, 0, 0.7);
+  position: relative;
+}
+
+.rummikub-table::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background-image: radial-gradient(rgba(255, 255, 255, 0.04) 1px, transparent 0);
+  background-size: 24px 24px;
+  pointer-events: none;
+  opacity: 0.6;
+}
+
+/* Mahogany Wooden Rail around the table */
+.wood-border {
+  background: linear-gradient(135deg, #422006 0%, #291204 40%, #1c0d03 100%);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.6), inset 0 1px 2px rgba(255, 255, 255, 0.2);
+}
+
+/* Realistic 3D Ivory Rummikub Tile */
+.rummi-tile {
+  background: linear-gradient(180deg, #ffffff 0%, #fdfbf7 30%, #f3ece1 90%, #ebdcc9 100%);
+  border-radius: 6px;
+  box-shadow: 
+    0 1px 0 rgba(255, 255, 255, 0.9) inset,
+    0 -2px 0 rgba(175, 150, 125, 0.6) inset,
+    0 3px 5px -1px rgba(0, 0, 0, 0.35),
+    0 1px 3px -1px rgba(0, 0, 0, 0.2);
+  border: 1px solid #d9cbba;
+  transition: transform 0.15s cubic-bezier(0.2, 0, 0, 1), box-shadow 0.15s ease;
+  position: relative;
+  touch-action: manipulation;
+}
+
+.rummi-tile:hover {
+  transform: translateY(-2px) scale(1.02);
+  box-shadow: 
+    0 1px 0 rgba(255, 255, 255, 0.9) inset,
+    0 -2px 0 rgba(175, 150, 125, 0.6) inset,
+    0 6px 10px -2px rgba(0, 0, 0, 0.4),
+    0 3px 5px -2px rgba(0, 0, 0, 0.25);
+  z-index: 10;
+}
+
+.rummi-tile.selected {
+  transform: translateY(-5px) scale(1.05);
+  border-color: #3b82f6;
+  box-shadow: 
+    0 0 0 2px #60a5fa,
+    0 8px 14px -2px rgba(37, 99, 235, 0.45),
+    0 4px 6px -2px rgba(0, 0, 0, 0.35);
+  z-index: 20;
+}
+
+.rummi-tile.drag-over {
+  border-color: #10b981;
+  box-shadow: 0 0 0 2px #34d399, 0 8px 14px rgba(16, 185, 129, 0.4);
+}
+
+/* Face-Down Tiles */
+.rummi-tile-back {
+  background: linear-gradient(180deg, #2b313a 0%, #1e2229 50%, #15181d 100%);
+  border-radius: 4px;
+  box-shadow: 
+    0 1px 0 rgba(255, 255, 255, 0.15) inset,
+    0 3px 5px rgba(0, 0, 0, 0.4);
+  border: 1px solid #3d4552;
+}
+
+/* Two-tier Wooden Player Rack */
+.player-rack-shelf {
+  background: linear-gradient(180deg, #5c2f10 0%, #3e1e07 35%, #2a1404 100%);
+  box-shadow: 
+    inset 0 2px 4px rgba(255, 255, 255, 0.25),
+    inset 0 -3px 6px rgba(0, 0, 0, 0.7),
+    0 8px 20px rgba(0, 0, 0, 0.7);
+  border: 2px solid #6d3914;
+  border-radius: 12px;
+  position: relative;
+}
+
+.player-rack-groove {
+  background: linear-gradient(180deg, #1b0d03 0%, #2e1606 100%);
+  box-shadow: inset 0 3px 6px rgba(0, 0, 0, 0.8), 0 1px 1px rgba(255, 255, 255, 0.1);
+  border-radius: 6px;
+}
+
+/* Custom scrollbars */
+::-webkit-scrollbar {
+  width: 5px;
+  height: 5px;
+}
+::-webkit-scrollbar-track {
+  background: rgba(0, 0, 0, 0.2);
+  border-radius: 4px;
+}
+::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.2);
+  border-radius: 4px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: rgba(255, 255, 255, 0.35);
+}
+
+/* Glow pulse for active player's turn */
+@keyframes turn-glow {
+  0%, 100% {
+    box-shadow: 0 0 12px rgba(234, 179, 8, 0.6), 0 0 4px rgba(234, 179, 8, 0.8);
+  }
+  50% {
+    box-shadow: 0 0 20px rgba(234, 179, 8, 0.9), 0 0 8px rgba(234, 179, 8, 1);
+  }
+}
+
+.active-turn-pulse {
+  animation: turn-glow 2s infinite ease-in-out;
+}
+
+/* Floating reaction animation */
+@keyframes float-up-fade {
+  0% {
+    opacity: 0;
+    transform: translateY(10px) scale(0.8);
+  }
+  20% {
+    opacity: 1;
+    transform: translateY(0) scale(1.1);
+  }
+  80% {
+    opacity: 1;
+    transform: translateY(-16px) scale(1);
+  }
+  100% {
+    opacity: 0;
+    transform: translateY(-32px) scale(0.9);
+  }
+}
+
+.animate-reaction {
+  animation: float-up-fade 2.5s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+}
+
+/* Smooth tile draw animation: sliding from pool to player rack (Requirement 1) */
+@keyframes tile-draw-fly {
+  0% {
+    opacity: 0.9;
+    transform: translate(0, 0) scale(0.8) rotate(10deg);
+  }
+  50% {
+    opacity: 1;
+    transform: translate(-30vw, 35vh) scale(1.15) rotate(-5deg);
+  }
+  100% {
+    opacity: 0;
+    transform: translate(-40vw, 65vh) scale(1) rotate(0deg);
+  }
+}
+
+.animate-tile-draw {
+  animation: tile-draw-fly 0.65s cubic-bezier(0.2, 0.8, 0.3, 1) forwards;
+  pointer-events: none;
+}

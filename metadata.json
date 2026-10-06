@@ -1,0 +1,6 @@
+{
+  "name": "רומיקוב ישראלי אונליין - Rummikub Multiplayer",
+  "description": "משחק רומיקוב מרובה משתתפים בזמן אמת בעברית עם שולחן משחק מציאותי, חוקי רומיקוב רשמיים, מהלכים חופשיים על הלוח ומשחק עם חברים.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
