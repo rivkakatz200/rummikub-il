@@ -14,6 +14,7 @@ import { RulesModal } from './components/RulesModal';
 import { RoundEndModal } from './components/RoundEndModal';
 import { ReactionsBar } from './components/ReactionsBar';
 import { FaceDownTile } from './components/TileView';
+import { Watermark } from './components/Watermark';
 import {
   playTileClick,
   playTilePlace,
@@ -916,6 +917,7 @@ export default function App() {
           initialRoomCode={urlRoomCode}
         />
         <RulesModal isOpen={rulesOpen} onClose={() => setRulesOpen(false)} />
+        <Watermark />
       </>
     );
   }
@@ -1125,6 +1127,7 @@ export default function App() {
         onLeaveRoom={handleLeaveRoom}
         isHost={isHost}
       />
+      <Watermark />
     </div>
   );
 }

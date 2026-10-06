@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useRef, useEffect } from 'react';
 import { MessageSquare, Sparkles } from 'lucide-react';
 
 interface ReactionsBarProps {
@@ -18,6 +18,23 @@ const QUICK_REACTIONS = [
 
 export const ReactionsBar: React.FC<ReactionsBarProps> = ({ onSendReaction }) => {
   const [isOpen, setIsOpen] = useState(false);
+  const buttonRef = useRef<HTMLButtonElement>(null);
+  const panelRef = useRef<HTMLDivElement>(null);
+
+  // Close on outside click
+  useEffect(() => {
+    if (!isOpen) return;
+    const handler = (e: MouseEvent) => {
+      if (
+        panelRef.current && !panelRef.current.contains(e.target as Node) &&
+        buttonRef.current && !buttonRef.current.contains(e.target as Node)
+      ) {
+        setIsOpen(false);
+      }
+    };
+    document.addEventListener('mousedown', handler);
+    return () => document.removeEventListener('mousedown', handler);
+  }, [isOpen]);
 
   const handleSelect = (emoji: string, text?: string) => {
     onSendReaction(emoji, text);
@@ -27,6 +44,7 @@ export const ReactionsBar: React.FC<ReactionsBarProps> = ({ onSendReaction }) =>
   return (
     <div className="relative">
       <button
+        ref={buttonRef}
         onClick={() => setIsOpen(!isOpen)}
         className="p-2 sm:px-3 sm:py-2 rounded-xl bg-stone-900/90 hover:bg-stone-800 border border-stone-700 text-amber-300 font-bold text-xs flex items-center gap-1.5 shadow-lg transition"
         title="שלח תגובה מהירה לשחקנים"
@@ -38,7 +56,18 @@ export const ReactionsBar: React.FC<ReactionsBarProps> = ({ onSendReaction }) =>
 
       {isOpen && (
         <div
-          className="absolute bottom-full left-0 mb-2 w-64 sm:w-72 p-2.5 rounded-2xl bg-stone-900 border border-stone-700/80 shadow-2xl z-40 flex flex-col gap-1.5 text-right backdrop-blur-md"
+          ref={panelRef}
+          className="fixed z-[200] w-64 sm:w-72 p-2.5 rounded-2xl bg-stone-900 border border-stone-700/80 shadow-2xl flex flex-col gap-1.5 text-right backdrop-blur-md"
+          style={(() => {
+            if (!buttonRef.current) return { top: 56, right: 8 };
+            const rect = buttonRef.current.getBoundingClientRect();
+            const panelWidth = 288;
+            // Drop down below the button; align right edge with button right edge
+            let left = rect.right - panelWidth;
+            // Clamp so panel never goes off left edge
+            if (left < 8) left = 8;
+            return { top: rect.bottom + 6, left };
+          })()}
           dir="rtl"
         >
           <div className="text-[11px] font-bold text-stone-400 px-1 mb-1">
