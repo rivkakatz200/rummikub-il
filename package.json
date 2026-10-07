@@ -10,7 +10,8 @@
     "preview": "vite preview",
     "clean": "rm -rf dist server.js",
     "lint": "tsc --noEmit",
-    "test:bot": "tsx scripts/testGeminiBot.ts"
+    "test:bot": "tsx scripts/testGeminiBot.ts",
+    "test:solver": "tsx scripts/testSolver.ts"
   },
   "dependencies": {
     "@google/genai": "^2.4.0",

@@ -1,4 +1,4 @@
-import './server/loadEnv.js'; // MUST be first — loads .env.local / .env before any other module reads process.env
+﻿import './server/loadEnv.js'; // MUST be first — loads .env.local / .env before any other module reads process.env
 import express from 'express';
 import http from 'http';
 import { WebSocketServer, WebSocket } from 'ws';
@@ -20,6 +20,7 @@ import {
   calculateInitialMeldPoints,
 } from './src/utils/rummikubRules.js';
 import { geminiBotMove, getGeminiConfig } from './server/geminiBot.js';
+import { BotDifficulty } from './server/rummikubSolver.js';
 import {
   sanitizeText,
   validateRoomCode,
@@ -38,6 +39,7 @@ const PORT = Number(process.env.PORT) || 3000;
 interface ServerPlayer extends Player {
   ws?: WebSocket | null;
   rack: Tile[];
+  difficulty?: BotDifficulty;
 }
 
 interface ServerRoom {
@@ -237,6 +239,10 @@ async function handleBotTurn(room: ServerRoom) {
   if (!bot || !bot.isBot) return;
 
   const t0 = Date.now();
+  const opponentTileCounts = room.players
+    .filter(p => p.id !== bot.id)
+    .map(p => p.rack.length);
+
   const result = await geminiBotMove(
     bot.rack,
     room.board,
@@ -245,14 +251,23 @@ async function handleBotTurn(room: ServerRoom) {
     room.pool.length,
     bot.name,
     room.id,
+    bot.difficulty ?? 'hard',
+    opponentTileCounts,
   );
 
   // Guard: room may have ended while we awaited Gemini
   if (room.status !== 'playing') return;
 
-  const latency = result.latencyMs ?? (Date.now() - t0);
+  // Human-like pacing: total thinking time 1500–3500 ms (randomised)
+  const elapsed = Date.now() - t0;
+  const targetDelay = 1500 + Math.floor(Math.random() * 2000);
+  const remaining = targetDelay - elapsed;
+  if (remaining > 0) await new Promise(r => setTimeout(r, remaining));
+  if (room.status !== 'playing') return;
+
+  const latency = Date.now() - t0;
   const reasonStr = result.fallbackReason !== 'none' ? ` reason=${result.fallbackReason}` : '';
-  console.log(`[bot] room=${room.id} name=${bot.name} source=${result.source} action=${result.action} latency=${latency}ms${reasonStr}`);
+  console.log(`[bot] room=${room.id} name=${bot.name} source=${result.source} action=${result.action} tilesPlaced=${result.tilesPlaced} solverMs=${result.solverMs} rearranged=${result.rearranged} latency=${latency}ms${reasonStr}`);
 
   if (result.action === 'play' && result.newBoard && result.newRack) {
     // ── Safety validation before applying any bot move ────────────────────
@@ -659,6 +674,7 @@ async function startServer() {
             const botNames = ['רומי-בוט', 'מחשב אלפא', 'רובוט חכם', 'אלוף הרומי'];
             const botIndex = room.players.filter((p) => p.isBot).length;
             const botId = `bot_${Date.now()}_${botIndex}`;
+            const botDifficulty = (message.difficulty === 'easy' || message.difficulty === 'medium') ? message.difficulty : 'hard';
 
             const botPlayer: ServerPlayer = {
               id: botId,
@@ -672,6 +688,7 @@ async function startServer() {
               isConnected: true,
               rack: [],
               ws: null,
+              difficulty: botDifficulty,
             };
 
             room.players.push(botPlayer);
