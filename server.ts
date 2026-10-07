@@ -1,3 +1,4 @@
+import './server/loadEnv.js'; // MUST be first — loads .env.local / .env before any other module reads process.env
 import express from 'express';
 import http from 'http';
 import { WebSocketServer, WebSocket } from 'ws';
@@ -18,7 +19,7 @@ import {
   calculateHandPenaltyPoints,
   calculateInitialMeldPoints,
 } from './src/utils/rummikubRules.js';
-import { geminiBotMove } from './server/geminiBot.js';
+import { geminiBotMove, getGeminiConfig } from './server/geminiBot.js';
 import {
   sanitizeText,
   validateRoomCode,
@@ -235,6 +236,7 @@ async function handleBotTurn(room: ServerRoom) {
   const bot = room.players[room.currentTurnIndex];
   if (!bot || !bot.isBot) return;
 
+  const t0 = Date.now();
   const result = await geminiBotMove(
     bot.rack,
     room.board,
@@ -242,36 +244,99 @@ async function handleBotTurn(room: ServerRoom) {
     room.settings.minInitialMeld,
     room.pool.length,
     bot.name,
+    room.id,
   );
 
   // Guard: room may have ended while we awaited Gemini
   if (room.status !== 'playing') return;
 
-  console.log(`[bot:${bot.name}] move source=${result.source} action=${result.action}`);
+  const latency = result.latencyMs ?? (Date.now() - t0);
+  const reasonStr = result.fallbackReason !== 'none' ? ` reason=${result.fallbackReason}` : '';
+  console.log(`[bot] room=${room.id} name=${bot.name} source=${result.source} action=${result.action} latency=${latency}ms${reasonStr}`);
 
   if (result.action === 'play' && result.newBoard && result.newRack) {
+    // ── Safety validation before applying any bot move ────────────────────
+    const oldBoardIds = new Set(room.board.flatMap(s => s.tiles.map(t => t.id)));
+    const oldRackIds  = new Set(bot.rack.map(t => t.id));
+    const newBoardIds = result.newBoard.flatMap(s => s.tiles.map(t => t.id));
+
+    // 1. Board validity
+    const boardVal = validateBoard(result.newBoard);
+    if (!boardVal.valid) {
+      console.warn(`[bot] room=${room.id} name=${bot.name} INVALID board from ${result.source}: ${boardVal.errors[0]} — forcing draw`);
+      applyBotDraw(room, bot);
+      advanceToNextTurn(room);
+      return;
+    }
+
+    // 2. Tile conservation: no invented tiles, no lost board tiles
+    const allLegalIds = new Set([...oldBoardIds, ...oldRackIds]);
+    const inventedTile = newBoardIds.find(id => !allLegalIds.has(id));
+    if (inventedTile) {
+      console.warn(`[bot] room=${room.id} name=${bot.name} INVENTED tile ${inventedTile} from ${result.source} — forcing draw`);
+      applyBotDraw(room, bot);
+      advanceToNextTurn(room);
+      return;
+    }
+    const lostBoardTile = [...oldBoardIds].find(id => !newBoardIds.includes(id));
+    if (lostBoardTile) {
+      console.warn(`[bot] room=${room.id} name=${bot.name} LOST board tile ${lostBoardTile} from ${result.source} — forcing draw`);
+      applyBotDraw(room, bot);
+      advanceToNextTurn(room);
+      return;
+    }
+
+    // 3. newRack must equal oldRack minus the tiles placed on the board
+    const newRackIds = new Set(result.newRack.map(t => t.id));
+    const placedIds  = new Set(newBoardIds.filter(id => oldRackIds.has(id)));
+    const expectedRackIds = new Set([...oldRackIds].filter(id => !placedIds.has(id)));
+    const rackMismatch =
+      newRackIds.size !== expectedRackIds.size ||
+      [...newRackIds].some(id => !expectedRackIds.has(id));
+    if (rackMismatch) {
+      console.warn(`[bot] room=${room.id} name=${bot.name} RACK mismatch from ${result.source} — forcing draw`);
+      applyBotDraw(room, bot);
+      advanceToNextTurn(room);
+      return;
+    }
+
+    // 4. Initial meld check
+    if (!bot.hasInitialMeld && room.settings.minInitialMeld > 0) {
+      const meld = calculateInitialMeldPoints(result.newBoard, room.board, room.settings.minInitialMeld);
+      if (meld.touchedExisting || meld.points < room.settings.minInitialMeld) {
+        console.warn(`[bot] room=${room.id} name=${bot.name} INITIAL MELD failed (points=${meld.points}, touchedExisting=${meld.touchedExisting}) from ${result.source} — forcing draw`);
+        applyBotDraw(room, bot);
+        advanceToNextTurn(room);
+        return;
+      }
+    }
+
+    // ── Apply validated move ───────────────────────────────────────────────
     room.board = result.newBoard;
-    bot.rack = result.newRack;
+    bot.rack   = result.newRack;
     bot.hasInitialMeld = true;
     room.lastActionMessage = `${bot.name} הוריד אריחים ללוח!`;
 
-    // Check if bot won
     if (bot.rack.length === 0) {
       handlePlayerWin(room, bot);
       return;
     }
   } else {
-    // Bot draws a tile
-    if (room.pool.length > 0) {
-      const drawn = room.pool.pop()!;
-      bot.rack.push(drawn);
-      room.lastActionMessage = `${bot.name} לקח אריח מהקופה.`;
-    } else {
-      room.lastActionMessage = `הקופה ריקה, ${bot.name} העביר את התור.`;
-    }
+    applyBotDraw(room, bot);
   }
 
   advanceToNextTurn(room);
+}
+
+function applyBotDraw(room: ServerRoom, bot: ServerPlayer): void {
+  if (room.pool.length > 0) {
+    const drawn = room.pool.pop()!;
+    bot.rack.push(drawn);
+    room.lastActionMessage = `${bot.name} לקח אריח מהקופה.`;
+  } else {
+    // Pool empty — pass the turn without crashing
+    room.lastActionMessage = `הקופה ריקה, ${bot.name} העביר את התור.`;
+  }
 }
 
 function handlePlayerWin(room: ServerRoom, winner: ServerPlayer) {
@@ -969,8 +1034,16 @@ async function startServer() {
   });
 
   // REST API Endpoints for redundancy & health
-  app.get('/api/health', (req, res) => {
-    res.json({ status: 'ok', timestamp: Date.now(), activeRooms: rooms.size });
+  const { geminiConfigured, geminiModel } = getGeminiConfig();
+
+  app.get('/api/health', (_req, res) => {
+    res.json({
+      status: 'ok',
+      timestamp: Date.now(),
+      activeRooms: rooms.size,
+      geminiConfigured,
+      geminiModel,
+    });
   });
 
   app.get('/api/room/:code/sync', (req, res) => {

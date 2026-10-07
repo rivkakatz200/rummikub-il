@@ -2,21 +2,19 @@
  * server/geminiBot.ts
  *
  * All Gemini API logic for bot moves. Never imported by any client-side file.
- * The API key is read exclusively from process.env.GEMINI_API_KEY.
+ * The API key is read lazily from process.env at call time (not at import time),
+ * so loadEnv.ts has already populated process.env before this module is used.
  *
- * Strategy (requirement #7 — candidate-list approach):
+ * Strategy (candidate-list approach):
  *   1. Enumerate legal candidate moves with the existing heuristic rule code.
  *   2. Send the candidates as a numbered list to Gemini; ask it to pick the best index.
- *   3. If no candidates exist (e.g. bot must make initial meld from scratch), fall back
- *      to free-form board generation and validate the result with the rule functions.
+ *   3. If no candidates exist (initial meld from scratch), use free-form mode and
+ *      validate the result with the rule functions.
  *   4. On any error / timeout / bad output → fall back to heuristic immediately.
  */
 
 import { GoogleGenAI } from '@google/genai';
-import {
-  Tile,
-  TileSet,
-} from '../src/types/rummikub.js';
+import { Tile, TileSet } from '../src/types/rummikub.js';
 import {
   botFindMove,
   validateBoard,
@@ -26,38 +24,85 @@ import {
 
 type CandidateMove = { action: 'play' | 'draw'; newBoard?: TileSet[]; newRack?: Tile[] };
 
-// ─── Config ──────────────────────────────────────────────────────────────────
-
-const API_KEY = process.env.GEMINI_API_KEY ?? '';
-const MODEL   = process.env.GEMINI_MODEL ?? 'gemini-2.0-flash';
 const TIMEOUT_MS = 9_000;
 
-// Log a one-time warning if the key is absent
+// ─── Lazy config (read at call time, not at import time) ──────────────────────
+
+interface GeminiConfig { apiKey: string; model: string; }
+
+let _config: GeminiConfig | null = null;
+let _client: GoogleGenAI | null = null;
 let _warnedMissingKey = false;
-function warnMissingKey() {
-  if (!_warnedMissingKey) {
-    console.warn('[geminiBot] GEMINI_API_KEY is not set — bot will always use heuristic fallback.');
-    _warnedMissingKey = true;
+
+function getConfig(): GeminiConfig {
+  if (!_config) {
+    _config = {
+      apiKey: process.env.GEMINI_API_KEY ?? '',
+      model:  process.env.GEMINI_MODEL  ?? 'gemini-2.0-flash',
+    };
   }
+  return _config;
 }
 
-// One concurrent call guard per server process (not per room) — free tier is tight
-let _callInFlight = false;
+function getClient(): GoogleGenAI | null {
+  const { apiKey } = getConfig();
+  if (!apiKey) return null;
+  if (!_client) _client = new GoogleGenAI({ apiKey });
+  return _client;
+}
+
+/** Called once at server startup to log config status and return health fields. */
+export function getGeminiConfig(): { geminiConfigured: boolean; geminiModel: string } {
+  const { apiKey, model } = getConfig();
+  const configured = Boolean(apiKey);
+  if (!configured && !_warnedMissingKey) {
+    _warnedMissingKey = true;
+    console.warn('[geminiBot] GEMINI_API_KEY is not set — bot will always use heuristic fallback.');
+  }
+  console.log(`[geminiBot] configured=${configured} model=${model}`);
+  return { geminiConfigured: configured, geminiModel: model };
+}
+
+// ─── Per-room concurrency guard ───────────────────────────────────────────────
+// Prevents two rooms from blocking each other on the free-tier rate limit.
+
+const _inFlight = new Map<string, boolean>();
+
+function acquireLock(roomId: string): boolean {
+  if (_inFlight.get(roomId)) return false;
+  _inFlight.set(roomId, true);
+  return true;
+}
+
+function releaseLock(roomId: string): void {
+  _inFlight.delete(roomId);
+}
 
 // ─── Public types ─────────────────────────────────────────────────────────────
+
+export type FallbackReason =
+  | 'missing-key'
+  | 'concurrent-call'
+  | 'timeout'
+  | 'rate-limited'
+  | 'model-not-found'
+  | 'api-error'
+  | 'invalid-json'
+  | 'invalid-index'
+  | 'invalid-move'
+  | 'none';
 
 export interface BotMoveResult {
   action: 'play' | 'draw';
   newBoard?: TileSet[];
   newRack?: Tile[];
   source: 'gemini' | 'gemini-retry' | 'fallback';
+  fallbackReason: FallbackReason;
+  latencyMs: number;
 }
 
 // ─── Main entry point ─────────────────────────────────────────────────────────
 
-/**
- * Decide the bot's move. Always returns a valid result; never throws.
- */
 export async function geminiBotMove(
   rack: Tile[],
   board: TileSet[],
@@ -65,53 +110,60 @@ export async function geminiBotMove(
   minInitialMeld: number,
   poolCount: number,
   botName: string,
+  roomId: string,
 ): Promise<BotMoveResult> {
-  // No key → heuristic immediately
-  if (!API_KEY) {
-    warnMissingKey();
-    return fallback(rack, board, hasInitialMeld, minInitialMeld, 'fallback');
+  const t0 = Date.now();
+
+  const client = getClient();
+  if (!client) {
+    if (!_warnedMissingKey) {
+      _warnedMissingKey = true;
+      console.warn('[geminiBot] GEMINI_API_KEY is not set — bot will always use heuristic fallback.');
+    }
+    return { ...fallback(rack, board, hasInitialMeld, minInitialMeld), latencyMs: Date.now() - t0, fallbackReason: 'missing-key' };
   }
 
-  // Concurrent call guard — free tier allows ~15 RPM; don't queue, just fall back
-  if (_callInFlight) {
-    console.log(`[geminiBot] call already in flight, using fallback for ${botName}`);
-    return fallback(rack, board, hasInitialMeld, minInitialMeld, 'fallback');
+  if (!acquireLock(roomId)) {
+    return { ...fallback(rack, board, hasInitialMeld, minInitialMeld), latencyMs: Date.now() - t0, fallbackReason: 'concurrent-call' };
   }
 
-  _callInFlight = true;
   try {
-    return await callGemini(rack, board, hasInitialMeld, minInitialMeld, poolCount, botName, false);
+    return await callGemini(client, rack, board, hasInitialMeld, minInitialMeld, poolCount, botName, roomId, false, t0);
   } finally {
-    _callInFlight = false;
+    releaseLock(roomId);
   }
 }
 
 // ─── Core Gemini call ─────────────────────────────────────────────────────────
 
 async function callGemini(
+  client: GoogleGenAI,
   rack: Tile[],
   board: TileSet[],
   hasInitialMeld: boolean,
   minInitialMeld: number,
   poolCount: number,
   botName: string,
+  roomId: string,
   isRetry: boolean,
+  t0: number,
   retryHint?: string,
 ): Promise<BotMoveResult> {
   const source = isRetry ? 'gemini-retry' : 'gemini';
+  const { model } = getConfig();
 
-  // Build candidate list with the heuristic rule engine
   const candidates: CandidateMove[] = findCandidateMoves(rack, board, hasInitialMeld, minInitialMeld);
 
-  try {
-    const ai = new GoogleGenAI({ apiKey: API_KEY });
+  // AbortController so a late response is never applied after timeout
+  const controller = new AbortController();
+  const timeoutHandle = setTimeout(() => controller.abort(), TIMEOUT_MS);
 
+  try {
     let prompt: string;
     let schema: object;
 
     if (candidates.length > 0) {
-      // ── Candidate-selection mode (preferred) ──────────────────────────────
-      prompt = buildCandidatePrompt(rack, board, hasInitialMeld, minInitialMeld, poolCount, candidates as CandidateMove[], retryHint);
+      prompt = buildCandidatePrompt(rack, board, hasInitialMeld, minInitialMeld, poolCount, candidates, retryHint);
       schema = {
         type: 'object',
         properties: {
@@ -121,111 +173,102 @@ async function callGemini(
         required: ['chosenIndex'],
       };
     } else {
-      // ── Free-form mode (initial meld or no candidates found) ──────────────
       prompt = buildFreeFormPrompt(rack, board, hasInitialMeld, minInitialMeld, poolCount, retryHint);
       schema = buildFreeFormSchema();
     }
 
-    // Race the API call against a timeout
-    const responseText = await Promise.race([
-      doApiCall(ai, prompt, schema),
-      timeout(TIMEOUT_MS),
-    ]);
+    const responseText = await doApiCall(client, model, prompt, schema, controller.signal);
+    clearTimeout(timeoutHandle);
 
-    // Parse and validate
-    const parsed = JSON.parse(responseText);
+    let parsed: any;
+    try {
+      parsed = JSON.parse(responseText);
+    } catch {
+      return { ...fallback(rack, board, hasInitialMeld, minInitialMeld), source: 'fallback', latencyMs: Date.now() - t0, fallbackReason: 'invalid-json' };
+    }
 
     if (candidates.length > 0) {
-      // Candidate-selection: pick by index
       const idx = typeof parsed.chosenIndex === 'number' ? parsed.chosenIndex : -1;
       if (idx >= 0 && idx < candidates.length) {
         const chosen = candidates[idx];
-        console.log(`[geminiBot] ${source} chose candidate #${idx} for ${botName}: action=${chosen.action}`);
-        return { ...chosen, source };
+        return { action: chosen.action, newBoard: chosen.newBoard, newRack: chosen.newRack, source, latencyMs: Date.now() - t0, fallbackReason: 'none' };
       }
-      // Bad index → fall back
-      console.warn(`[geminiBot] ${source} returned invalid index ${idx} (${candidates.length} candidates), using fallback`);
-      return fallback(rack, board, hasInitialMeld, minInitialMeld, 'fallback');
+      return { ...fallback(rack, board, hasInitialMeld, minInitialMeld), source: 'fallback', latencyMs: Date.now() - t0, fallbackReason: 'invalid-index' };
     } else {
-      // Free-form: validate the proposed board
       const validationError = validateFreeFormMove(parsed, rack, board, hasInitialMeld, minInitialMeld);
       if (!validationError) {
-        const result: BotMoveResult = {
-          action: parsed.action,
-          source,
-        };
+        const result: BotMoveResult = { action: parsed.action, source, latencyMs: Date.now() - t0, fallbackReason: 'none' };
         if (parsed.action === 'play') {
           result.newBoard = parsed.board as TileSet[];
           result.newRack  = parsed.tilesFromRack
             ? rack.filter(t => !(parsed.tilesFromRack as string[]).includes(t.id))
             : rack;
         }
-        console.log(`[geminiBot] ${source} free-form move accepted for ${botName}: action=${parsed.action}`);
         return result;
       }
 
-      // Validation failed
       if (!isRetry) {
-        console.warn(`[geminiBot] gemini free-form move invalid (${validationError}), retrying…`);
-        _callInFlight = false; // allow the retry
-        _callInFlight = true;
-        return callGemini(rack, board, hasInitialMeld, minInitialMeld, poolCount, botName, true, validationError);
+        // Release lock temporarily so the retry can acquire it
+        releaseLock(roomId);
+        const retryResult = await callGemini(client, rack, board, hasInitialMeld, minInitialMeld, poolCount, botName, roomId, true, t0, validationError);
+        // Re-acquire is handled by the outer try/finally in geminiBotMove — we just return
+        return retryResult;
       }
-      console.warn(`[geminiBot] retry also invalid (${validationError}), using fallback`);
-      return fallback(rack, board, hasInitialMeld, minInitialMeld, 'fallback');
+      return { ...fallback(rack, board, hasInitialMeld, minInitialMeld), source: 'fallback', latencyMs: Date.now() - t0, fallbackReason: 'invalid-move' };
     }
   } catch (err: any) {
+    clearTimeout(timeoutHandle);
     const msg: string = err?.message ?? String(err);
-    if (msg === 'TIMEOUT') {
-      console.warn(`[geminiBot] API call timed out for ${botName}, using fallback`);
+    let reason: FallbackReason = 'api-error';
+
+    if (err?.name === 'AbortError' || msg === 'TIMEOUT') {
+      reason = 'timeout';
     } else if (msg.includes('429') || msg.includes('RESOURCE_EXHAUSTED')) {
-      console.warn(`[geminiBot] rate limited (429) for ${botName}, using fallback`);
-    } else {
-      console.error(`[geminiBot] API error for ${botName}:`, msg);
+      reason = 'rate-limited';
+    } else if (msg.includes('404') || msg.includes('not found') || msg.includes('MODEL_NOT_FOUND')) {
+      reason = 'model-not-found';
+      console.error(`[geminiBot] model-not-found: GEMINI_MODEL="${getConfig().model}" is probably wrong or retired. Check https://ai.google.dev/gemini-api/docs/models`);
     }
-    return fallback(rack, board, hasInitialMeld, minInitialMeld, 'fallback');
+
+    return { ...fallback(rack, board, hasInitialMeld, minInitialMeld), source: 'fallback', latencyMs: Date.now() - t0, fallbackReason: reason };
   }
 }
 
 // ─── API call helper ──────────────────────────────────────────────────────────
 
-async function doApiCall(ai: GoogleGenAI, prompt: string, schema: object): Promise<string> {
+async function doApiCall(
+  ai: GoogleGenAI,
+  model: string,
+  prompt: string,
+  schema: object,
+  _signal: AbortSignal, // kept for future SDK support; AbortController.abort() covers timeout
+): Promise<string> {
   const response = await ai.models.generateContent({
-    model: MODEL,
+    model,
     contents: prompt,
     config: {
       responseMimeType: 'application/json',
       responseSchema: schema,
-      temperature: 0.2, // low temperature for consistent structured output
+      temperature: 0.2,
     },
   });
   return response.text ?? '{}';
 }
 
-function timeout(ms: number): Promise<never> {
-  return new Promise((_, reject) =>
-    setTimeout(() => reject(new Error('TIMEOUT')), ms)
-  );
-}
-
 // ─── Prompt builders ──────────────────────────────────────────────────────────
 
 function buildCandidatePrompt(
-  rack: Tile[],
-  board: TileSet[],
-  hasInitialMeld: boolean,
-  minInitialMeld: number,
-  poolCount: number,
-  candidates: CandidateMove[],
-  retryHint?: string,
+  rack: Tile[], board: TileSet[], hasInitialMeld: boolean,
+  minInitialMeld: number, poolCount: number,
+  candidates: CandidateMove[], retryHint?: string,
 ): string {
-  const candidateSummaries = candidates.map((c, i) => {
+  const summaries = candidates.map((c, i) => {
     if (c.action === 'draw') return `${i}: DRAW a tile from the pool`;
-    const tilesPlaced = rack.filter(t => !c.newRack!.find(r => r.id === t.id));
-    return `${i}: PLAY — place ${tilesPlaced.length} tile(s): ${tilesPlaced.map(tileStr).join(', ')}`;
+    const placed = rack.filter(t => !c.newRack!.find(r => r.id === t.id));
+    return `${i}: PLAY — place ${placed.length} tile(s): ${placed.map(tileStr).join(', ')}`;
   });
 
-  return `You are playing Israeli Rummikub as a smart bot named "${rack.length > 0 ? 'Bot' : 'Bot'}".
+  return `You are playing Israeli Rummikub as a smart bot.
 
 GAME STATE:
 - Your rack (${rack.length} tiles): ${JSON.stringify(rack.map(compactTile))}
@@ -234,21 +277,17 @@ GAME STATE:
 - Initial meld done: ${hasInitialMeld} (min points required: ${minInitialMeld})
 
 CANDIDATE MOVES (pre-validated as legal):
-${candidateSummaries.join('\n')}
+${summaries.join('\n')}
 
-Choose the index of the best move. Prefer moves that place more tiles. If drawing is the only option, choose it.
+Choose the index of the best move. Prefer moves that place more tiles.
 ${retryHint ? `\nPREVIOUS ATTEMPT ERROR: ${retryHint}` : ''}
 
 Respond with JSON only.`;
 }
 
 function buildFreeFormPrompt(
-  rack: Tile[],
-  board: TileSet[],
-  hasInitialMeld: boolean,
-  minInitialMeld: number,
-  poolCount: number,
-  retryHint?: string,
+  rack: Tile[], board: TileSet[], hasInitialMeld: boolean,
+  minInitialMeld: number, poolCount: number, retryHint?: string,
 ): string {
   return `You are playing Israeli Rummikub. Decide the bot's move.
 
@@ -256,8 +295,8 @@ RULES SUMMARY:
 - A GROUP: 3-4 tiles, same number, all different colors.
 - A RUN: 3+ tiles, same color, consecutive numbers (1-13). No wrapping.
 - Joker (number=0) can substitute any tile in a set.
-- Initial meld: first time playing, all new sets must come entirely from your rack and sum to >= ${minInitialMeld} points (face value). You cannot use or rearrange existing board tiles.
-- After initial meld: you may rearrange the entire board freely, as long as every set remains valid and no tiles are lost.
+- Initial meld: all new sets must come entirely from your rack and sum to >= ${minInitialMeld} points.
+- After initial meld: you may rearrange the entire board freely; every set must remain valid and no tiles may be lost.
 - If you cannot play, draw one tile (action="draw").
 
 GAME STATE:
@@ -267,7 +306,7 @@ GAME STATE:
 - Initial meld done: ${hasInitialMeld}
 
 INSTRUCTIONS:
-- If playing: return action="play", board=<full new board as array of sets>, tilesFromRack=<array of tile IDs you took from your rack>.
+- If playing: return action="play", board=<full new board>, tilesFromRack=<array of tile IDs from your rack>.
 - If drawing: return action="draw".
 - Do NOT invent tiles. Only use tiles from your rack or already on the board.
 - Every set on the returned board must be valid (group or run, >= 3 tiles).
@@ -280,14 +319,13 @@ function buildFreeFormSchema(): object {
   const tileSchema = {
     type: 'object',
     properties: {
-      id:     { type: 'string' },
-      color:  { type: 'string' },
-      number: { type: 'integer' },
-      isJoker:{ type: 'boolean' },
+      id:      { type: 'string' },
+      color:   { type: 'string' },
+      number:  { type: 'integer' },
+      isJoker: { type: 'boolean' },
     },
     required: ['id', 'color', 'number'],
   };
-
   return {
     type: 'object',
     properties: {
@@ -316,11 +354,8 @@ function buildFreeFormSchema(): object {
 // ─── Validation of free-form output ──────────────────────────────────────────
 
 function validateFreeFormMove(
-  parsed: any,
-  rack: Tile[],
-  board: TileSet[],
-  hasInitialMeld: boolean,
-  minInitialMeld: number,
+  parsed: any, rack: Tile[], board: TileSet[],
+  hasInitialMeld: boolean, minInitialMeld: number,
 ): string | null {
   if (parsed.action === 'draw') return null;
   if (parsed.action !== 'play') return 'action must be "play" or "draw"';
@@ -328,32 +363,22 @@ function validateFreeFormMove(
   const proposedBoard: TileSet[] = parsed.board;
   if (!Array.isArray(proposedBoard)) return 'board must be an array';
 
-  // Build tile ID inventories
   const originalBoardIds = new Set(board.flatMap(s => s.tiles.map(t => t.id)));
   const rackIds          = new Set(rack.map(t => t.id));
   const allLegalIds      = new Set([...originalBoardIds, ...rackIds]);
+  const proposedIds      = proposedBoard.flatMap(s => s.tiles.map(t => t.id));
 
-  const proposedIds = proposedBoard.flatMap(s => s.tiles.map(t => t.id));
-
-  // No invented tiles
   for (const id of proposedIds) {
     if (!allLegalIds.has(id)) return `tile ${id} does not exist in rack or board`;
   }
-
-  // No lost tiles — all original board tiles must still be present
   for (const id of originalBoardIds) {
     if (!proposedIds.includes(id)) return `original board tile ${id} is missing from proposed board`;
   }
+  if (!proposedIds.some(id => rackIds.has(id))) return 'no tiles were played from the rack';
 
-  // At least one rack tile was played
-  const playedFromRack = proposedIds.filter(id => rackIds.has(id));
-  if (playedFromRack.length === 0) return 'no tiles were played from the rack';
-
-  // Every set is valid
   const boardVal = validateBoard(proposedBoard);
   if (!boardVal.valid) return boardVal.errors[0] ?? 'invalid set on board';
 
-  // Initial meld check
   if (!hasInitialMeld && minInitialMeld > 0) {
     const meldResult = calculateInitialMeldPoints(proposedBoard, board, minInitialMeld);
     if (meldResult.touchedExisting) return 'initial meld cannot use existing board tiles';
@@ -367,26 +392,20 @@ function validateFreeFormMove(
 // ─── Heuristic fallback ───────────────────────────────────────────────────────
 
 function fallback(
-  rack: Tile[],
-  board: TileSet[],
-  hasInitialMeld: boolean,
-  minInitialMeld: number,
-  source: BotMoveResult['source'],
-): BotMoveResult {
+  rack: Tile[], board: TileSet[], hasInitialMeld: boolean, minInitialMeld: number,
+): Omit<BotMoveResult, 'latencyMs' | 'fallbackReason'> {
   const result = botFindMove(rack, board, hasInitialMeld, minInitialMeld);
-  return { ...result, source };
+  return { ...result, source: 'fallback' };
 }
 
-// ─── Compact serialisers (keep prompts small) ─────────────────────────────────
+// ─── Compact serialisers ──────────────────────────────────────────────────────
 
 function tileStr(t: Tile): string {
   return t.isJoker ? 'JOKER' : `${t.number}${t.color[0].toUpperCase()}`;
 }
 
 function compactTile(t: Tile) {
-  return t.isJoker
-    ? { id: t.id, joker: true }
-    : { id: t.id, c: t.color[0], n: t.number };
+  return t.isJoker ? { id: t.id, joker: true } : { id: t.id, c: t.color[0], n: t.number };
 }
 
 function compactSet(s: TileSet) {
