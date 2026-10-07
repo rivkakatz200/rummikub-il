@@ -941,9 +941,9 @@ export default function App() {
   const activePlayer = gameState.players[gameState.currentTurnIndex];
 
   return (
-    // Single Screen Layout: Strictly 100vh max-height without scrolling (Requirement 5)
     <div
-      className="h-screen max-h-screen w-screen overflow-hidden bg-[#08150e] flex flex-col justify-between text-stone-100 font-['Assistant',sans-serif] p-1.5 sm:p-2 box-border relative select-none"
+      className="game-screen w-screen overflow-hidden bg-[#08150e] flex flex-col text-stone-100 font-['Assistant',sans-serif] p-1 sm:p-1.5 box-border relative select-none"
+      style={{ height: '100dvh' }}
       dir="rtl"
     >
       {/* Tile Draw Flying Animation (Requirement 1) */}
@@ -1066,8 +1066,8 @@ export default function App() {
         </div>
       </header>
 
-      {/* Opponents Physical Black Racks Row (Requirements 5 & 6) */}
-      <div className="w-full grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-1.5 mb-1 shrink-0">
+      {/* Opponents compact chips row */}
+      <div className="w-full flex flex-wrap gap-1 mb-1 shrink-0">
         {opponents.map((opp) => (
           <OpponentRack
             key={opp.id}
@@ -1080,7 +1080,7 @@ export default function App() {
         ))}
       </div>
 
-      {/* Table Center Felt Area (BoardView with visual Pool & Set manipulation) */}
+      {/* Board — takes all remaining space */}
       <div className="flex-1 min-h-0 w-full relative mb-1 flex flex-col">
         <BoardView
           board={localBoard}
@@ -1098,7 +1098,7 @@ export default function App() {
         />
       </div>
 
-      {/* Bottom Area: Controls + Player Rack (Compact height) */}
+      {/* Bottom: controls + rack */}
       <div className="w-full flex flex-col gap-1 shrink-0">
         <GameControls
           isMyTurn={isMyTurn}

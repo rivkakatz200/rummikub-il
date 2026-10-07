@@ -54,7 +54,7 @@ export const RoundEndModal: React.FC<RoundEndModalProps> = ({
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-4 bg-black/85 backdrop-blur-md animate-in fade-in duration-300">
       <div
-        className="bg-stone-900 border-2 border-amber-500/70 rounded-3xl max-w-lg w-full p-6 flex flex-col items-center text-center shadow-2xl relative overflow-hidden"
+        className="bg-stone-900 border-2 border-amber-500/70 rounded-3xl max-w-lg w-full max-h-[90dvh] overflow-y-auto p-6 flex flex-col items-center text-center shadow-2xl relative overflow-hidden"
         dir="rtl"
       >
         {/* Background glow */}

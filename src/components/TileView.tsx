@@ -8,31 +8,25 @@ interface TileViewProps {
   isDragOver?: boolean;
   onClick?: () => void;
   onDragStart?: (e: React.DragEvent) => void;
+  /** Dynamic pixel size from useFitTileSize. Overrides `size` when provided. */
+  tileW?: number;
+  tileH?: number;
   size?: 'sm' | 'md' | 'lg';
   showPoints?: boolean;
 }
 
 const COLOR_CLASSES: Record<TileColor, { text: string; bgSoft: string; border: string }> = {
-  black: {
-    text: 'text-zinc-950 font-black',
-    bgSoft: 'bg-zinc-100',
-    border: 'border-zinc-800',
-  },
-  blue: {
-    text: 'text-blue-700 font-black',
-    bgSoft: 'bg-blue-50',
-    border: 'border-blue-700',
-  },
-  red: {
-    text: 'text-red-600 font-black',
-    bgSoft: 'bg-red-50',
-    border: 'border-red-600',
-  },
-  yellow: {
-    text: 'text-amber-600 font-black',
-    bgSoft: 'bg-amber-50',
-    border: 'border-amber-600',
-  },
+  black: { text: 'text-zinc-950 font-black', bgSoft: 'bg-zinc-100', border: 'border-zinc-800' },
+  blue:  { text: 'text-blue-700 font-black',  bgSoft: 'bg-blue-50',  border: 'border-blue-700' },
+  red:   { text: 'text-red-600 font-black',   bgSoft: 'bg-red-50',   border: 'border-red-600'  },
+  yellow:{ text: 'text-amber-600 font-black', bgSoft: 'bg-amber-50', border: 'border-amber-600'},
+};
+
+// Fallback static sizes (used when tileW/tileH not provided)
+const STATIC_SIZE: Record<string, { w: number; h: number }> = {
+  sm: { w: 28, h: 40 },
+  md: { w: 34, h: 48 },
+  lg: { w: 44, h: 60 },
 };
 
 export const TileView: React.FC<TileViewProps> = ({
@@ -41,49 +35,64 @@ export const TileView: React.FC<TileViewProps> = ({
   isDragOver = false,
   onClick,
   onDragStart,
+  tileW: propW,
+  tileH: propH,
   size = 'md',
   showPoints = false,
 }) => {
   const colorMeta = COLOR_CLASSES[tile.color] || COLOR_CLASSES.black;
+  const fallback = STATIC_SIZE[size];
+  const w = propW ?? fallback.w;
+  const h = propH ?? fallback.h;
 
-  // Size styling optimized for single-screen view
-  const sizeClasses = {
-    sm: 'w-7 h-10 text-xs sm:w-8 sm:h-11 sm:text-sm',
-    md: 'w-8.5 h-12 text-sm sm:w-9.5 sm:h-13 sm:text-base',
-    lg: 'w-11 h-15 text-base sm:w-12 sm:h-17 sm:text-xl',
-  }[size];
+  // Scale font and icon relative to tile width
+  const numFontSize = Math.max(8, Math.round(w * 0.52));
+  const jokerIconSize = Math.max(10, Math.round(w * 0.55));
+  const jokerLabelSize = Math.max(6, Math.round(w * 0.28));
+  const dotSize = Math.max(4, Math.round(w * 0.14));
+  const underlineW = Math.max(8, Math.round(w * 0.45));
 
   return (
     <div
       draggable={Boolean(onDragStart)}
       onDragStart={onDragStart}
       onClick={onClick}
-      className={`rummi-tile flex flex-col items-center justify-between py-1 px-1 select-none cursor-pointer relative shrink-0 ${sizeClasses} ${
-        isSelected ? 'selected' : ''
-      } ${isDragOver ? 'drag-over' : ''}`}
+      style={{ width: w, height: h, transition: 'width 0.15s ease, height 0.15s ease', touchAction: 'none' }}
+      className={`rummi-tile flex flex-col items-center justify-between py-[3px] px-[2px] select-none cursor-pointer relative shrink-0${
+        isSelected ? ' selected' : ''
+      }${isDragOver ? ' drag-over' : ''}`}
       title={tile.isJoker ? "ג'וקר (מחליף כל אריח)" : `${tile.number} (${getColorHebrew(tile.color)})`}
     >
-      {/* Top micro symbol / dot */}
-      <div className="w-full flex items-center justify-between px-0.5 text-[9px] opacity-60">
+      {/* Top dot */}
+      <div className="w-full flex items-center justify-between px-[2px]" style={{ opacity: 0.6 }}>
         <span
-          className={`w-1.5 h-1.5 rounded-full ${
-            tile.isJoker
-              ? 'bg-gradient-to-r from-red-500 via-amber-400 to-blue-500'
-              : getBgColorClass(tile.color)
-          }`}
+          className={`rounded-full ${tile.isJoker ? 'bg-gradient-to-r from-red-500 via-amber-400 to-blue-500' : getBgColorClass(tile.color)}`}
+          style={{ width: dotSize, height: dotSize, display: 'inline-block' }}
         />
-        {tile.isJoker && <span className="text-[8px] font-bold text-red-500">★</span>}
+        {tile.isJoker && <span style={{ fontSize: 7, fontWeight: 700, color: '#ef4444' }}>★</span>}
       </div>
 
-      {/* Main tile content */}
+      {/* Main content */}
       {tile.isJoker ? (
         <div className="flex flex-col items-center justify-center my-auto">
           <div className="relative">
-            <Smile className="w-6 h-6 sm:w-7 sm:h-7 text-amber-500 fill-amber-300 stroke-[2.2]" />
-            <div className="absolute -top-1 -right-1 w-2.5 h-2.5 rounded-full bg-red-500 border border-white" />
-            <div className="absolute -top-1 -left-1 w-2.5 h-2.5 rounded-full bg-blue-600 border border-white" />
+            <Smile
+              style={{ width: jokerIconSize, height: jokerIconSize }}
+              className="text-amber-500 fill-amber-300 stroke-[2.2]"
+            />
+            <div
+              className="absolute rounded-full bg-red-500 border border-white"
+              style={{ width: dotSize + 2, height: dotSize + 2, top: -2, right: -2 }}
+            />
+            <div
+              className="absolute rounded-full bg-blue-600 border border-white"
+              style={{ width: dotSize + 2, height: dotSize + 2, top: -2, left: -2 }}
+            />
           </div>
-          <span className="text-[9px] sm:text-[10px] font-black text-amber-700 tracking-tighter leading-none mt-0.5">
+          <span
+            className="font-black text-amber-700 tracking-tighter leading-none mt-0.5"
+            style={{ fontSize: jokerLabelSize }}
+          >
             ג׳וקר
           </span>
         </div>
@@ -91,36 +100,42 @@ export const TileView: React.FC<TileViewProps> = ({
         <div className="flex flex-col items-center justify-center my-auto">
           <span
             className={`${colorMeta.text} tracking-tight leading-none drop-shadow-sm font-['Rubik',sans-serif]`}
+            style={{ fontSize: numFontSize }}
           >
             {tile.number}
           </span>
-          {/* Subtle colored underline distinguishing 6 and 9 like physical rummikub */}
           {(tile.number === 6 || tile.number === 9) && (
-            <span className={`w-3.5 h-[2px] mt-0.5 rounded-full ${getBgColorClass(tile.color)}`} />
+            <span
+              className={`rounded-full mt-0.5 ${getBgColorClass(tile.color)}`}
+              style={{ width: underlineW, height: 2, display: 'inline-block' }}
+            />
           )}
         </div>
       )}
 
-      {/* Bottom label or points value */}
-      <div className="w-full flex items-center justify-center text-[8px] text-stone-400 font-medium">
-        {showPoints && (
-          <span className="opacity-80">
-            {tile.isJoker ? '30' : tile.number}
-          </span>
-        )}
+      {/* Bottom points */}
+      <div className="w-full flex items-center justify-center" style={{ fontSize: 7, color: '#a8a29e' }}>
+        {showPoints && <span style={{ opacity: 0.8 }}>{tile.isJoker ? '30' : tile.number}</span>}
       </div>
 
-      {/* Glossy top bevel highlight */}
+      {/* Glossy bevel */}
       <div className="absolute top-0 left-0 right-0 h-1/3 bg-gradient-to-b from-white/70 to-transparent rounded-t-[5px] pointer-events-none" />
     </div>
   );
 };
 
-export const FaceDownTile: React.FC<{ size?: 'sm' | 'md' }> = ({ size = 'md' }) => {
-  const sizeClasses = size === 'sm' ? 'w-6 h-10' : 'w-7 h-11 sm:w-8 sm:h-12';
+export const FaceDownTile: React.FC<{ size?: 'sm' | 'md'; tileW?: number; tileH?: number }> = ({
+  size = 'md',
+  tileW,
+  tileH,
+}) => {
+  const fallback = STATIC_SIZE[size];
+  const w = tileW ?? fallback.w;
+  const h = tileH ?? fallback.h;
   return (
     <div
-      className={`rummi-tile-back ${sizeClasses} shrink-0 flex items-center justify-center relative overflow-hidden`}
+      className="rummi-tile-back shrink-0 flex items-center justify-center relative overflow-hidden"
+      style={{ width: w, height: h }}
     >
       <div className="w-3 h-3 rounded-full border border-amber-500/20 flex items-center justify-center">
         <div className="w-1 h-1 rounded-full bg-amber-500/40" />
@@ -131,26 +146,18 @@ export const FaceDownTile: React.FC<{ size?: 'sm' | 'md' }> = ({ size = 'md' }) 
 
 function getColorHebrew(color: TileColor): string {
   switch (color) {
-    case 'black':
-      return 'שחור';
-    case 'blue':
-      return 'כחול';
-    case 'red':
-      return 'אדום';
-    case 'yellow':
-      return 'צהוב';
+    case 'black':  return 'שחור';
+    case 'blue':   return 'כחול';
+    case 'red':    return 'אדום';
+    case 'yellow': return 'צהוב';
   }
 }
 
 function getBgColorClass(color: TileColor): string {
   switch (color) {
-    case 'black':
-      return 'bg-zinc-900';
-    case 'blue':
-      return 'bg-blue-600';
-    case 'red':
-      return 'bg-red-600';
-    case 'yellow':
-      return 'bg-amber-500';
+    case 'black':  return 'bg-zinc-900';
+    case 'blue':   return 'bg-blue-600';
+    case 'red':    return 'bg-red-600';
+    case 'yellow': return 'bg-amber-500';
   }
 }
