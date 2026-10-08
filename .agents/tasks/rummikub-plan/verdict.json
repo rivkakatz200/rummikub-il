@@ -1,0 +1,9 @@
+{
+  "verdict": "APPROVED",
+  "findings": [
+    "useMemo ref snapshot fragility — highlightedTileIds reads myLastCompletedTurnNumberRef.current inline; correct today because ref is mutated before setGameState, but moving the ref update into a useEffect would silently reintroduce an off-by-one. Convert to useState to make the dependency explicit.",
+    "test:idle uses npx tsx while all other package.json test scripts use bare tsx. Change to 'tsx scripts/testIdle.ts' for consistency.",
+    "lastReceivedAtRef initialized to Date.now() at component mount before WebSocket opens; if first connection takes >45s the dead-socket detector fires spuriously. Initialize inside the onopen handler instead."
+  ],
+  "reviewDoc": ".agents/tasks/rummikub-plan/2026-10-08-174059-review.md"
+}

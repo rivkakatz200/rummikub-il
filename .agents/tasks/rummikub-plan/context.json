@@ -1,0 +1,24 @@
+{
+  "project_type": "Vite + React 19 SPA client, Express + ws WebSocket server, TypeScript ESM, single repo",
+  "language": "TypeScript (strict, ESM modules)",
+  "build_system": "Vite 8 for client (vite build), tsx for server (no separate compile step in dev). tsc --project tsconfig.server.json for server typecheck only.",
+  "test_framework": "No test runner (vitest/jest). Tests are plain tsx scripts under scripts/. Pattern: assert(label, cond) function, print pass/fail count, process.exit(1) on failure.",
+  "build_command": "npm run build  (runs typecheck:server then vite build)",
+  "test_command": "npm run lint  (runs tsc --noEmit for client types). Server types: npm run typecheck:server. New test: npx tsx scripts/testIdle.ts (requires running server on port 3000).",
+  "verification_instructions": "1. npm run lint — verifies client TypeScript. 2. npm run typecheck:server — verifies server TypeScript. 3. npm run build — full production build. 4. npx tsx scripts/testIdle.ts — integration smoke test for new server behaviors (requires server running).",
+  "snapshot_or_generated_files": "dist/ is the Vite build output, not checked in. No other generated files.",
+  "environment_constraints": "Windows workspace. Server runs on port 3000 by default (process.env.PORT). Test scripts connect to ws://localhost:${PORT||3000}/ws. Do NOT restart the dev server mid-test — the test script starts its own connections. tsx is available globally via npx.",
+  "contribution_requirements": "No AGENTS.md or CONTRIBUTING.md found. Follow existing code style: Hebrew error messages, ESM imports with .js extensions on server-side relative imports, React functional components with hooks.",
+  "key_patterns": "Server: ServerRoom interface in server.ts (not exported). All WS messages handled in a single switch in wss.on('connection'). broadcastRoom() sends per-player sanitized state via getSanitizedGameState(). Client: App.tsx is the monolithic state manager. All WS messages in socket.onmessage switch. Child components receive callbacks as props, no context/redux. Test scripts: import from '../src/...' with .js extension, use assert() helper, print labeled sections.",
+  "relevant_files": [
+    "src/types/rummikub.ts",
+    "server.ts",
+    "src/App.tsx",
+    "src/components/GameControls.tsx",
+    "src/components/PlayerRack.tsx",
+    "src/components/TileView.tsx",
+    "scripts/testPool.ts",
+    "package.json"
+  ],
+  "directory_structure": "Root: server.ts (Express+WS), package.json, tsconfig.server.json. src/: App.tsx (main client), components/, hooks/, types/rummikub.ts, utils/. server/: geminiBot.ts, loadEnv.ts, rummikubSolver.ts. scripts/: test scripts (testPool.ts, testSolver.ts, testGeminiBot.ts, testBoardLayout.ts). dist/: build output (not checked in)."
+}
