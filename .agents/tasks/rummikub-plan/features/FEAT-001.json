@@ -30,5 +30,25 @@
     "npm run build"
   ],
   "blocked_reason": null,
-  "findings": "Pre-existing lint errors in src/components/PlayerRack.tsx (missing 'mode' field in FitOptions) and src/hooks/useFitTileSize.ts (SetStateAction type mismatch) — not caused by FEAT-001 changes, files not touched. npm run build passes. FEAT-002 can proceed: server.ts and App.tsx are ready; the recentActions[] array is live and turnCounter is monotonic. Note: App.tsx still contains the placeholder tile logic in handleDrawTile (Tile with id 'drawing_placeholder_') and isDrawingAnimation — FEAT-002 (Bug B) should clean these up."
+  "findings": "Pre-existing lint errors in src/components/PlayerRack.tsx (missing 'mode' field in FitOptions) and src/hooks/useFitTileSize.ts (SetStateAction type mismatch) — not caused by FEAT-001 changes, files not touched. npm run build passes. FEAT-002 can proceed: server.ts and App.tsx are ready; the recentActions[] array is live and turnCounter is monotonic. Note: App.tsx still contains the placeholder tile logic in handleDrawTile (Tile with id 'drawing_placeholder_') and isDrawingAnimation — FEAT-002 (Bug B) should clean these up.",
+  "integration_verification": {
+    "commands_run": [
+      "npm run lint",
+      "npm run typecheck:server",
+      "npm run build"
+    ],
+    "results": {
+      "lint": "PASS — 0 TypeScript errors (exit code 0)",
+      "typecheck:server": "PASS — 0 TypeScript errors (exit code 0)",
+      "build": "PASS — 1675 modules transformed, dist/ produced successfully (exit code 0)"
+    },
+    "cross_seam_checks": [
+      "src/types/rummikub.ts: recentActions: LastAction[] present in GameState — consumed by both server.ts (getSanitizedGameState) and App.tsx (highlight logic). Types align.",
+      "server.ts: recordAction() produces LastAction with turnNumber from monotonic turnCounter. getSanitizedGameState includes recentActions. No type mismatches.",
+      "App.tsx: myLastCompletedTurnNumberRef updated in ROOM_STATE handler. highlightedTileIds useMemo reads gameState.recentActions — field is non-optional so no null-guard needed beyond optional-chain on gameState itself.",
+      "App.tsx → GameControls: isDrawPending passed as prop, consumed correctly. Type GameControlsProps updated with isDrawPending?: boolean. No missing field errors.",
+      "PlayerRack.tsx: isPlaceholder / FaceDownTile branches fully removed. No unused imports remain."
+    ],
+    "verified_at": "integration iteration 1"
+  }
 }

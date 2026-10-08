@@ -44,5 +44,26 @@
     "npx tsx scripts/testIdle.ts (requires server running on localhost:3000)"
   ],
   "blocked_reason": null,
-  "findings": "All 19 steps implemented. Fixed two pre-existing TypeScript errors: (1) useFitTileSize.ts line 259 where setTileSize was passed {tileW,tileH} instead of {w,h}; (2) PlayerRack.tsx missing required mode:'rack' discriminant. Both errors originated in FEAT-001's useFitTileSize refactor. The FaceDownTile import was removed from PlayerRack (now unused). The Tile import was removed from App.tsx handleDrawTile (placeholder removed). connectWebSocket double-connect guard added. All checks pass: npm run lint, npm run typecheck:server, npm run build."
+  "findings": "All 19 steps implemented. Fixed two pre-existing TypeScript errors: (1) useFitTileSize.ts line 259 where setTileSize was passed {tileW,tileH} instead of {w,h}; (2) PlayerRack.tsx missing required mode:'rack' discriminant. Both errors originated in FEAT-001's useFitTileSize refactor. The FaceDownTile import was removed from PlayerRack (now unused). The Tile import was removed from App.tsx handleDrawTile (placeholder removed). connectWebSocket double-connect guard added. All checks pass: npm run lint, npm run typecheck:server, npm run build.",
+  "integration_verification": {
+    "commands_run": [
+      "npm run lint",
+      "npm run typecheck:server",
+      "npm run build"
+    ],
+    "results": {
+      "lint": "PASS — 0 TypeScript errors (exit code 0)",
+      "typecheck:server": "PASS — 0 TypeScript errors (exit code 0)",
+      "build": "PASS — 1675 modules transformed, dist/ produced successfully (exit code 0)"
+    },
+    "cross_seam_checks": [
+      "server.ts PING setInterval correctly uses WebSocket.OPEN constant — same file already imports WebSocket from 'ws'.",
+      "server.ts room_not_found ERROR sends present in DRAW_TILE, FINISH_TURN, RESET_TURN, and RECONNECT_SESSION else branch.",
+      "App.tsx PING case sends PONG via socket (local closure variable). PONG case is a no-op break.",
+      "App.tsx isDrawPending cleared in both ROOM_STATE and ERROR cases — covers all server response paths.",
+      "App.tsx → GameControls: isDrawPending prop typed as optional boolean, consumed for disabled and label — no missing required props.",
+      "No cross-FEAT type conflicts: recentActions is non-optional in GameState (required field), and server always initialises it before broadcastRoom."
+    ],
+    "verified_at": "integration iteration 1"
+  }
 }
