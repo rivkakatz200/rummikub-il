@@ -1080,8 +1080,8 @@ export default function App() {
         ))}
       </div>
 
-      {/* Board — takes all remaining space */}
-      <div className="flex-1 min-h-0 w-full relative mb-1 flex flex-col">
+      {/* Board — takes all remaining space, guaranteed ≥40dvh so bottom area never squeezes it */}
+      <div className="flex-1 min-h-0 w-full relative mb-1 flex flex-col" style={{ minHeight: 'min(40dvh, 40vh)' }}>
         <BoardView
           board={localBoard}
           isMyTurn={isMyTurn}

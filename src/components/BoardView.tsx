@@ -4,7 +4,7 @@ import { TileView, FaceDownTile } from './TileView';
 import { validateSet } from '../utils/rummikubRules';
 import { Plus, Check, AlertTriangle, Layers, Undo2, Sparkles } from 'lucide-react';
 import { playTileClick, playTilePlace } from '../utils/audio';
-import { useFitTileSize } from '../hooks/useFitTileSize';
+import { useFitTileSize, computeBoardLayout } from '../hooks/useFitTileSize';
 
 interface BoardViewProps {
   board: TileSet[];
@@ -21,9 +21,11 @@ interface BoardViewProps {
   onAutoMergeSets?: () => void;
 }
 
-// Px from the scroll edge that triggers auto-scroll during drag
 const AUTO_SCROLL_ZONE  = 48;
-const AUTO_SCROLL_SPEED = 12; // px/frame max
+const AUTO_SCROLL_SPEED = 12;
+
+// Show debug overlay when URL contains ?debug=1
+const DEBUG = typeof window !== 'undefined' && new URLSearchParams(window.location.search).get('debug') === '1';
 
 export const BoardView: React.FC<BoardViewProps> = ({
   board,
@@ -41,68 +43,52 @@ export const BoardView: React.FC<BoardViewProps> = ({
   const [dropIndicator, setDropIndicator] = useState<{ setId: string; index: number } | null>(null);
   const [lastModifiedSetId, setLastModifiedSetId] = useState<string | null>(null);
 
-  // ── refs ────────────────────────────────────────────────────────────────
-  // scrollRef — the INNER scroll element
   const scrollRef      = useRef<HTMLDivElement>(null);
-  // toolbarRef — measured so paddingV is accurate
-  const toolbarRef     = useRef<HTMLDivElement>(null);
   const isDraggingRef  = useRef(false);
   const rafRef         = useRef<number | null>(null);
   const pointerYRef    = useRef<number>(0);
 
-  // ── Fit hook ─────────────────────────────────────────────────────────────
-  // containerRef goes on the OUTER box (measured, overflow hidden).
-  // paddingV = toolbar height + some vertical padding (measured dynamically
-  // by reading toolbarRef's offsetHeight after layout).
-  // We pass a generous fixed estimate here; the ResizeObserver on the outer
-  // box fires whenever the outer box changes, and the hook recomputes.
+  // OUTER measured box — containerRef goes here
+  // paddingV = toolbar (≈36px fixed, does NOT change between turns because the
+  // outer box height is fixed and measured; the toolbar is inside the box but
+  // we subtract it as a constant offset from the fit calculation)
   const [containerRef, tileSize, isOverflow] = useFitTileSize({
     sets:         board,
     maxTileW:     50,
-    minTileW:     22,
     gapRatio:     0.1,
     meldGapRatio: 0.35,
     paddingH:     24,
-    // The toolbar inside the outer box is ~36px (no-turn) or ~36px (my-turn).
-    // Add 16px breathing room → 52px total.
-    // The hook will recompute whenever the outer box height changes (e.g. on
-    // rotation), so this is only a static offset within the measured height.
-    paddingV: 52,
+    paddingV:     52, // toolbar ~36 + outer padding 8*2 + breathing room
   });
 
   const { w: tW, h: tH } = tileSize;
-  const tileGap = Math.max(2, Math.round(tW * 0.1));
-  const meldGap = Math.max(4, Math.round(tW * 0.35));
-  const dropZoneW = Math.max(4, Math.round(tW * 0.18));
-  const meldPad = Math.max(4, Math.round(tW * 0.18));
-  const headerFontSize = Math.max(9, Math.round(tW * 0.28));
+  const tileGap    = Math.max(2, Math.round(tW * 0.1));
+  const meldGap    = Math.max(4, Math.round(tW * 0.35));
+  const dropZoneW  = Math.max(3, Math.round(tW * 0.18));
+  const meldPad    = Math.max(3, Math.round(tW * 0.18));
+  const hdrFont    = Math.max(8, Math.round(tW * 0.26));
 
-  // ── drag auto-scroll ────────────────────────────────────────────────────
+  // ── auto-scroll during drag ──────────────────────────────────────────────
   const startAutoScroll = useCallback(() => {
     if (rafRef.current !== null) return;
     const tick = () => {
-      const scroll = scrollRef.current;
-      if (!scroll) { rafRef.current = null; return; }
-      const rect  = scroll.getBoundingClientRect();
-      const py    = pointerYRef.current;
-      const dTop  = py - rect.top;
-      const dBot  = rect.bottom - py;
-      let speed   = 0;
-      if (dTop < AUTO_SCROLL_ZONE && dTop >= 0)
-        speed = -AUTO_SCROLL_SPEED * (1 - dTop / AUTO_SCROLL_ZONE);
-      else if (dBot < AUTO_SCROLL_ZONE && dBot >= 0)
-        speed = AUTO_SCROLL_SPEED * (1 - dBot / AUTO_SCROLL_ZONE);
-      if (speed !== 0) scroll.scrollTop += speed;
+      const s = scrollRef.current;
+      if (!s) { rafRef.current = null; return; }
+      const rect = s.getBoundingClientRect();
+      const py   = pointerYRef.current;
+      const dT   = py - rect.top;
+      const dB   = rect.bottom - py;
+      let spd = 0;
+      if (dT < AUTO_SCROLL_ZONE && dT >= 0) spd = -AUTO_SCROLL_SPEED * (1 - dT / AUTO_SCROLL_ZONE);
+      else if (dB < AUTO_SCROLL_ZONE && dB >= 0) spd = AUTO_SCROLL_SPEED * (1 - dB / AUTO_SCROLL_ZONE);
+      if (spd !== 0) s.scrollTop += spd;
       rafRef.current = requestAnimationFrame(tick);
     };
     rafRef.current = requestAnimationFrame(tick);
   }, []);
 
   const stopAutoScroll = useCallback(() => {
-    if (rafRef.current !== null) {
-      cancelAnimationFrame(rafRef.current);
-      rafRef.current = null;
-    }
+    if (rafRef.current !== null) { cancelAnimationFrame(rafRef.current); rafRef.current = null; }
   }, []);
 
   useEffect(() => {
@@ -110,75 +96,73 @@ export const BoardView: React.FC<BoardViewProps> = ({
     const trackEnd  = ()             => { stopAutoScroll(); isDraggingRef.current = false; };
     document.addEventListener('dragover', trackMove);
     document.addEventListener('dragend',  trackEnd);
-    return () => {
-      document.removeEventListener('dragover', trackMove);
-      document.removeEventListener('dragend',  trackEnd);
-    };
+    return () => { document.removeEventListener('dragover', trackMove); document.removeEventListener('dragend', trackEnd); };
   }, [stopAutoScroll]);
 
   // ── scroll modified meld into view ──────────────────────────────────────
   useEffect(() => {
     if (!lastModifiedSetId || isDraggingRef.current) return;
-    const scroll = scrollRef.current;
-    if (!scroll) return;
-    const el = scroll.querySelector<HTMLElement>(`[data-set-id="${lastModifiedSetId}"]`);
+    const s = scrollRef.current;
+    if (!s) return;
+    const el = s.querySelector<HTMLElement>(`[data-set-id="${lastModifiedSetId}"]`);
     setLastModifiedSetId(null);
     if (!el) return;
     requestAnimationFrame(() => el.scrollIntoView({ behavior: 'smooth', block: 'nearest' }));
   }, [lastModifiedSetId]);
 
-  // ── handlers ────────────────────────────────────────────────────────────
-  const handleDragOver = (e: React.DragEvent) => {
-    e.preventDefault();
-    e.dataTransfer.dropEffect = 'move';
-  };
-
-  const handleDragStart = () => {
-    isDraggingRef.current = true;
-    startAutoScroll();
-  };
-
+  const handleDragOver = (e: React.DragEvent) => { e.preventDefault(); e.dataTransfer.dropEffect = 'move'; };
+  const handleDragStart = () => { isDraggingRef.current = true; startAutoScroll(); };
   const handleDrop = (e: React.DragEvent, targetSetId?: string, targetIndex?: number) => {
-    stopAutoScroll();
-    isDraggingRef.current = false;
-    setDropIndicator(null);
+    stopAutoScroll(); isDraggingRef.current = false; setDropIndicator(null);
     onDropTile(e, targetSetId, targetIndex);
     if (targetSetId) setLastModifiedSetId(targetSetId);
   };
 
-  // ── render ───────────────────────────────────────────────────────────────
+  // ── debug info ───────────────────────────────────────────────────────────
+  const debugLayout = DEBUG && containerRef.current
+    ? computeBoardLayout(containerRef.current.clientWidth, board, tW, 0.1, 0.35, 24)
+    : null;
+
   return (
-    /*
-     * OUTER: the fixed-size box. containerRef goes here.
-     * - flex-1 so it expands to fill the space given by App.tsx wrapper
-     * - min-h-0 so flex shrinks it below its content height
-     * - overflow-hidden keeps the border-radius clean and prevents leakage
-     * - flex flex-col so toolbar + scroll area stack vertically
-     */
     <div
       ref={containerRef}
       className="rummikub-table flex-1 w-full min-h-0 rounded-2xl flex flex-col border-4 border-[#3a1b05] shadow-[inset_0_4px_30px_rgba(0,0,0,0.8)] relative select-none overflow-hidden"
       style={{ padding: '8px 8px 6px' }}
     >
-      {/* Watermark — behind everything */}
+      {/* Watermark */}
       <div className="absolute inset-0 flex items-center justify-center pointer-events-none select-none opacity-5 z-0">
         <div className="flex flex-col items-center">
-          <span className="text-7xl sm:text-8xl font-black font-['Fredoka',sans-serif] tracking-wider text-amber-100">
-            רומיקוב
-          </span>
-          <span className="text-sm sm:text-base font-bold tracking-widest text-amber-200">
-            ISRAELI RUMMIKUB
-          </span>
+          <span className="text-7xl sm:text-8xl font-black font-['Fredoka',sans-serif] tracking-wider text-amber-100">רומיקוב</span>
+          <span className="text-sm sm:text-base font-bold tracking-widest text-amber-200">ISRAELI RUMMIKUB</span>
         </div>
       </div>
 
-      {/* ── TOP TOOLBAR — never scrolled ─────────────────────────────────── */}
+      {/* Debug overlay — ?debug=1 only */}
+      {DEBUG && (
+        <div
+          className="fixed bottom-2 left-2 z-50 pointer-events-none"
+          style={{
+            background: 'rgba(0,0,0,0.85)',
+            color: '#fbbf24',
+            fontSize: 10,
+            padding: '4px 8px',
+            borderRadius: 6,
+            fontFamily: 'monospace',
+            lineHeight: 1.6,
+          }}
+        >
+          <div>box: {containerRef.current?.clientWidth ?? '?'} × {containerRef.current?.clientHeight ?? '?'}px</div>
+          <div>tile: {tW}×{tH}px | rows: {debugLayout?.rows ?? '?'} | overflow: {String(isOverflow)}</div>
+          <div>turn: {isMyTurn ? 'MINE' : 'theirs'} | melds: {board.length}</div>
+          <div>tileH cap = boxH({containerRef.current?.clientHeight ?? 0})-52 / (3/0.72+2×0.35) ≈ {Math.floor((containerRef.current?.clientHeight ?? 0 - 52) / (3 / 0.72 + 0.7))}px</div>
+        </div>
+      )}
+
+      {/* TOP TOOLBAR */}
       <div
-        ref={toolbarRef}
         className="flex items-center justify-between z-10 w-full shrink-0 mb-1"
         style={{ minHeight: 32 }}
       >
-        {/* Pool button */}
         <div
           onClick={() => { if (isMyTurn && poolCount > 0) onDrawTileFromPool(); }}
           className={`flex items-center gap-1.5 px-2 py-1 rounded-xl border transition-all duration-200 ${
@@ -196,25 +180,21 @@ export const BoardView: React.FC<BoardViewProps> = ({
           <div className="flex flex-col text-right">
             <div className="flex items-center gap-1 font-bold text-amber-200 font-['Rubik']" style={{ fontSize: 11 }}>
               <span>הקופה</span>
-              {isMyTurn && poolCount > 0 && (
-                <span className="text-amber-400 animate-pulse font-normal" style={{ fontSize: 9 }}>(שלוף)</span>
-              )}
+              {isMyTurn && poolCount > 0 && <span className="text-amber-400 animate-pulse font-normal" style={{ fontSize: 9 }}>(שלוף)</span>}
             </div>
             <span className="font-mono text-stone-300" style={{ fontSize: 10 }}>{poolCount} אריחים</span>
           </div>
         </div>
 
-        {/* Table action buttons */}
         <div className="flex items-center gap-1.5">
           {isMyTurn && board.length >= 2 && onAutoMergeSets && (
             <button
               onClick={() => { playTilePlace(); onAutoMergeSets!(); }}
               className="px-2 py-1 rounded-xl bg-stone-900/90 hover:bg-stone-800 text-amber-300 hover:text-amber-200 border border-amber-500/40 font-bold flex items-center gap-1 shadow transition active:scale-95"
               style={{ fontSize: 11 }}
-              title="חבר אריחים מפוזרים על השולחן לסדרות חוקיות"
             >
               <Sparkles className="w-3 h-3 text-amber-400" />
-              <span className="hidden sm:inline">אחד סדרות חוקיות</span>
+              <span className="hidden sm:inline">אחד סדרות</span>
               <span className="sm:hidden">אחד</span>
             </button>
           )}
@@ -231,16 +211,7 @@ export const BoardView: React.FC<BoardViewProps> = ({
         </div>
       </div>
 
-      {/*
-       * INNER SCROLL ELEMENT
-       * - flex-1 + min-h-0 so it shrinks to the remaining flex space and
-       *   doesn't grow to content height (that's the key fix for scrolling)
-       * - overflow-y: auto so it ALWAYS scrolls when content overflows
-       *   (not conditional — this removes the isOverflow toggle bug)
-       * - overscroll-behavior: contain so it doesn't bubble to the page
-       * - touch-action: pan-y so touch-scroll works (tiles override with none)
-       * - -webkit-overflow-scrolling: touch for iOS momentum scroll
-       */}
+      {/* INNER SCROLL ELEMENT */}
       <div
         ref={scrollRef}
         className="flex-1 min-h-0 z-10 relative"
@@ -256,13 +227,10 @@ export const BoardView: React.FC<BoardViewProps> = ({
         onDragOver={handleDragOver}
         onDrop={(e) => handleDrop(e)}
       >
-        {/* Top fade — visible when scrolled down */}
-        <div
-          className="sticky top-0 left-0 right-0 h-4 pointer-events-none z-20"
-          style={{ background: 'linear-gradient(to bottom, rgba(8,21,14,0.75) 0%, transparent 100%)' }}
-        />
+        {/* Top fade */}
+        <div className="sticky top-0 left-0 right-0 h-4 pointer-events-none z-20"
+          style={{ background: 'linear-gradient(to bottom, rgba(8,21,14,0.75) 0%, transparent 100%)' }} />
 
-        {/* Empty board state */}
         {board.length === 0 ? (
           <div className="flex flex-col items-center justify-center text-center p-4" style={{ minHeight: 80 }}>
             <div className="w-10 h-10 rounded-xl bg-amber-500/10 border border-amber-500/20 flex items-center justify-center text-amber-400 mb-2">
@@ -270,17 +238,12 @@ export const BoardView: React.FC<BoardViewProps> = ({
             </div>
             <h3 className="text-sm font-bold text-amber-100 mb-0.5">שולחן המשחק ריק</h3>
             <p className="text-xs text-stone-300 max-w-sm mb-2">
-              {isMyTurn
-                ? 'זהו תורך! בחר אריחים במעמד ולחץ "הורד כסדרה חדשה" או גרור לשולחן.'
-                : 'ממתינים לתור הראשון שיוריד סדרות לשולחן...'}
+              {isMyTurn ? 'זהו תורך! בחר אריחים במעמד ולחץ "הורד כסדרה חדשה" או גרור לשולחן.'
+                        : 'ממתינים לתור הראשון שיוריד סדרות לשולחן...'}
             </p>
           </div>
         ) : (
-          /* Melds flex-wrap grid */
-          <div
-            className="flex flex-wrap content-start"
-            style={{ gap: meldGap, padding: 2, paddingBottom: 8 }}
-          >
+          <div className="flex flex-wrap content-start" style={{ gap: meldGap, padding: 2, paddingBottom: 8 }}>
             {board.map((set) => {
               const validation = validateSet(set.tiles);
               return (
@@ -297,19 +260,17 @@ export const BoardView: React.FC<BoardViewProps> = ({
                   style={{ padding: meldPad }}
                 >
                   {/* Set header */}
-                  <div
-                    className="flex items-center justify-between gap-1 px-1"
-                    style={{ marginBottom: Math.max(2, meldPad * 0.5), fontSize: headerFontSize }}
-                  >
+                  <div className="flex items-center justify-between gap-1 px-1"
+                    style={{ marginBottom: Math.max(2, meldPad * 0.5), fontSize: hdrFont }}>
                     <div className="flex items-center gap-1">
                       {validation.valid ? (
                         <span className="flex items-center gap-0.5 font-bold text-emerald-400">
-                          <Check style={{ width: headerFontSize, height: headerFontSize, strokeWidth: 3 }} />
+                          <Check style={{ width: hdrFont, height: hdrFont, strokeWidth: 3 }} />
                           <span>{validation.type === 'group' ? 'קבוצה' : 'רצף'} ({validation.points})</span>
                         </span>
                       ) : (
                         <span className="flex items-center gap-0.5 font-bold text-red-400" title={validation.error}>
-                          <AlertTriangle style={{ width: headerFontSize, height: headerFontSize }} />
+                          <AlertTriangle style={{ width: hdrFont, height: hdrFont }} />
                           <span>{validation.error || 'לא חוקי'}</span>
                         </span>
                       )}
@@ -318,10 +279,9 @@ export const BoardView: React.FC<BoardViewProps> = ({
                       <button
                         onClick={(e) => { e.stopPropagation(); playTileClick(); onReturnSetToRack!(set.id); }}
                         className="px-1 py-0.5 rounded bg-stone-900/80 hover:bg-stone-800 text-stone-300 hover:text-white font-bold flex items-center gap-0.5 border border-stone-700 transition active:scale-95"
-                        style={{ fontSize: Math.max(8, headerFontSize - 1) }}
-                        title="החזר את אריחי הסדרה הזו למעמד שלך"
+                        style={{ fontSize: Math.max(7, hdrFont - 1) }}
                       >
-                        <Undo2 style={{ width: headerFontSize, height: headerFontSize }} className="text-amber-400" />
+                        <Undo2 style={{ width: hdrFont, height: hdrFont }} className="text-amber-400" />
                         <span>החזר</span>
                       </button>
                     )}
@@ -330,90 +290,52 @@ export const BoardView: React.FC<BoardViewProps> = ({
                   {/* Tiles */}
                   <div
                     className="flex items-center flex-wrap bg-black/25 rounded-lg border border-white/5 relative"
-                    style={{
-                      gap: tileGap,
-                      padding: Math.max(3, tileGap),
-                      minHeight: tH + tileGap * 2,
-                      minWidth:  tW + tileGap * 2,
-                    }}
+                    style={{ gap: tileGap, padding: Math.max(3, tileGap), minHeight: tH + tileGap * 2, minWidth: tW + tileGap * 2 }}
                   >
-                    {/* Drop zone at index 0 */}
                     {isMyTurn && (
                       <div
                         onDragOver={(e) => { e.preventDefault(); e.stopPropagation(); setDropIndicator({ setId: set.id, index: 0 }); }}
                         onDragLeave={() => setDropIndicator(null)}
                         onDrop={(e) => { e.preventDefault(); e.stopPropagation(); handleDrop(e, set.id, 0); }}
                         style={{
-                          height:     tH,
-                          width:      dropIndicator?.setId === set.id && dropIndicator.index === 0 ? dropZoneW * 2 : dropZoneW,
+                          height: tH, width: dropIndicator?.setId === set.id && dropIndicator.index === 0 ? dropZoneW * 2 : dropZoneW,
                           background: dropIndicator?.setId === set.id && dropIndicator.index === 0 ? '#fbbf24' : 'transparent',
-                          borderRadius: 3,
-                          transition: 'width 0.1s, background 0.1s',
-                          flexShrink: 0,
+                          borderRadius: 3, transition: 'width 0.1s, background 0.1s', flexShrink: 0,
                         }}
                       />
                     )}
 
                     {set.tiles.map((tile, idx) => {
-                      const isSelected =
-                        selectedTile?.source === 'board' &&
-                        selectedTile.fromSetId === set.id &&
-                        selectedTile.tile.id   === tile.id;
-                      const isDropTarget =
-                        dropIndicator?.setId === set.id && dropIndicator.index === idx + 1;
-
+                      const isSelected = selectedTile?.source === 'board' && selectedTile.fromSetId === set.id && selectedTile.tile.id === tile.id;
+                      const isDropTarget = dropIndicator?.setId === set.id && dropIndicator.index === idx + 1;
                       return (
                         <React.Fragment key={tile.id}>
-                          <div
-                            className="relative"
-                            onDragOver={handleDragOver}
-                            onDrop={(e) => { e.stopPropagation(); handleDrop(e, set.id, idx); }}
-                          >
+                          <div className="relative" onDragOver={handleDragOver} onDrop={(e) => { e.stopPropagation(); handleDrop(e, set.id, idx); }}>
                             <TileView
-                              tile={tile}
-                              tileW={tW}
-                              tileH={tH}
-                              isSelected={isSelected}
+                              tile={tile} tileW={tW} tileH={tH} isSelected={isSelected}
                               onClick={() => {
                                 if (!isMyTurn) return;
                                 playTileClick();
                                 if (selectedTile) {
-                                  if (selectedTile.tile.id === tile.id) {
-                                    onTileSelect(tile, 'board', set.id, idx);
-                                  } else {
-                                    onMoveTileToSet(set.id, idx);
-                                    setLastModifiedSetId(set.id);
-                                  }
-                                } else {
-                                  onTileSelect(tile, 'board', set.id, idx);
-                                }
+                                  if (selectedTile.tile.id === tile.id) { onTileSelect(tile, 'board', set.id, idx); }
+                                  else { onMoveTileToSet(set.id, idx); setLastModifiedSetId(set.id); }
+                                } else { onTileSelect(tile, 'board', set.id, idx); }
                               }}
-                              onDragStart={isMyTurn
-                                ? (e) => {
-                                    handleDragStart();
-                                    e.dataTransfer.setData(
-                                      'application/json',
-                                      JSON.stringify({ tile, source: 'board', fromSetId: set.id, fromIndex: idx }),
-                                    );
-                                  }
-                                : undefined
-                              }
+                              onDragStart={isMyTurn ? (e) => {
+                                handleDragStart();
+                                e.dataTransfer.setData('application/json', JSON.stringify({ tile, source: 'board', fromSetId: set.id, fromIndex: idx }));
+                              } : undefined}
                             />
                           </div>
-
-                          {/* Drop zone after each tile */}
                           {isMyTurn && (
                             <div
                               onDragOver={(e) => { e.preventDefault(); e.stopPropagation(); setDropIndicator({ setId: set.id, index: idx + 1 }); }}
                               onDragLeave={() => setDropIndicator(null)}
                               onDrop={(e) => { e.preventDefault(); e.stopPropagation(); handleDrop(e, set.id, idx + 1); }}
                               style={{
-                                height:     tH,
-                                width:      isDropTarget ? dropZoneW * 2 : dropZoneW,
+                                height: tH, width: isDropTarget ? dropZoneW * 2 : dropZoneW,
                                 background: isDropTarget ? '#fbbf24' : 'transparent',
-                                borderRadius: 3,
-                                transition: 'width 0.1s, background 0.1s',
-                                flexShrink: 0,
+                                borderRadius: 3, transition: 'width 0.1s, background 0.1s', flexShrink: 0,
                               }}
                             />
                           )}
@@ -421,17 +343,11 @@ export const BoardView: React.FC<BoardViewProps> = ({
                       );
                     })}
 
-                    {/* "+ add" button when a tile is selected */}
                     {isMyTurn && selectedTile && (
                       <button
-                        onClick={() => {
-                          playTilePlace();
-                          onMoveTileToSet(set.id, set.tiles.length);
-                          setLastModifiedSetId(set.id);
-                        }}
+                        onClick={() => { playTilePlace(); onMoveTileToSet(set.id, set.tiles.length); setLastModifiedSetId(set.id); }}
                         className="rounded-md border-2 border-dashed border-amber-400/60 hover:border-amber-400 hover:bg-amber-400/20 text-amber-300 font-bold flex items-center justify-center transition"
-                        style={{ height: tH, width: Math.max(20, tW * 0.7), fontSize: 10 }}
-                        title="הוסף אריח נבחר לסוף הסדרה"
+                        style={{ height: tH, width: Math.max(16, tW * 0.7), fontSize: 10 }}
                       >
                         <Plus style={{ width: 12, height: 12 }} />
                       </button>
@@ -444,10 +360,8 @@ export const BoardView: React.FC<BoardViewProps> = ({
         )}
 
         {/* Bottom fade */}
-        <div
-          className="sticky bottom-0 left-0 right-0 h-4 pointer-events-none z-20"
-          style={{ background: 'linear-gradient(to top, rgba(8,21,14,0.75) 0%, transparent 100%)' }}
-        />
+        <div className="sticky bottom-0 left-0 right-0 h-4 pointer-events-none z-20"
+          style={{ background: 'linear-gradient(to top, rgba(8,21,14,0.75) 0%, transparent 100%)' }} />
       </div>
     </div>
   );

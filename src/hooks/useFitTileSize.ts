@@ -7,27 +7,20 @@ export interface TileSize {
 }
 
 // ─── Constants ────────────────────────────────────────────────────────────────
-export const MAX_ROWS_NORMAL = 3;   // tablets, desktop, tall phones
-export const MAX_ROWS_SMALL  = 2;   // narrow / short / landscape phones
-const TILE_ASPECT = 0.72;           // width / height (~w-8 h-11)
-
-// Minimum tile widths
-const MIN_TILE_W_BOARD  = 22;
-const MIN_TILE_W_RACK   = 24;
-// Maximum tile widths
-const MAX_TILE_W_BOARD  = 50;
-const MAX_TILE_W_RACK   = 46;
+// Absolute floor for legibility (overrides the 3-row guarantee only after everything else fails)
+export const ABS_MIN_TILE_W = 14;
+const TILE_ASPECT = 0.72;  // width / height
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 interface BoardOptions {
-  mode?: 'board';          // optional for backward compat
+  mode?: 'board';
   sets: TileSet[];
   maxTileW?: number;
   minTileW?: number;
-  gapRatio?: number;       // tile gap / tileW
-  meldGapRatio?: number;   // meld gap / tileW
-  paddingH?: number;       // horizontal padding consumed by the container chrome
-  paddingV?: number;       // vertical  padding consumed by the container chrome
+  gapRatio?: number;
+  meldGapRatio?: number;
+  paddingH?: number;
+  paddingV?: number;
 }
 
 interface RackOptions {
@@ -42,13 +35,16 @@ interface RackOptions {
 
 export type FitOptions = BoardOptions | RackOptions;
 
-// ─── Pure layout functions (exported so they can be unit-tested) ───────────────
+// ─── Pure layout functions ────────────────────────────────────────────────────
 
 export interface BoardLayoutResult {
   rows: number;
   totalH: number;
 }
 
+/**
+ * Given tile width, compute how many rows and total height the board needs.
+ */
 export function computeBoardLayout(
   containerW: number,
   sets: TileSet[],
@@ -100,72 +96,83 @@ export interface FitResult {
 }
 
 /**
- * Pure function: find the largest tile width where the board fits in
- * containerH with ≤ maxRows rows, then return whether it overflows.
- *
- * This is the function to unit-test. It does NOT depend on whose turn it is.
+ * The 3-row guarantee: compute maxTileH from box height so 3 rows always fit.
+ * Then find the largest tile size ≤ that cap where all melds fit.
  */
 export function computeBoardFit(
   containerW: number,
   containerH: number,
   sets: TileSet[],
   params: {
-    maxTileW: number;
-    minTileW: number;
     gapRatio: number;
     meldGapRatio: number;
     paddingH: number;
     paddingV: number;
-    maxRows: number;
   },
 ): FitResult {
-  const { maxTileW, minTileW, gapRatio, meldGapRatio, paddingH, paddingV, maxRows } = params;
+  const { gapRatio, meldGapRatio, paddingH, paddingV } = params;
 
   if (sets.length === 0) {
+    // empty board: use a reasonable mid-size tile
+    const tileW = 36;
     return {
-      tileW: maxTileW,
-      tileH: Math.round(maxTileW / TILE_ASPECT),
+      tileW,
+      tileH: Math.round(tileW / TILE_ASPECT),
       rows: 0,
       contentH: 0,
       overflow: false,
     };
   }
 
+  // THE 3-ROW GUARANTEE: compute the max tile height that allows 3 rows to fit
+  // availH = containerH - paddingV
+  // 3 rows means: 3 * tileH + 2 * gapY  ≤ availH
+  // Assume gapY scales with tileW: gapY = max(4, tileW * meldGapRatio)
+  // For simplicity, use a conservative estimate: gapY ≈ tileW * 0.35
+  // => 3*tileH + 2*tileW*0.35 ≤ availH
+  // => tileH ≤ (availH - 2*tileW*0.35)/3
+  // But tileH = tileW / TILE_ASPECT, so:
+  // => tileW / TILE_ASPECT ≤ (availH - 2*tileW*0.35)/3
+  // => tileW ≤ (availH * TILE_ASPECT) / (1 + 2*0.35*TILE_ASPECT*3)
+  // Simplify: solve for tileW directly from the constraint.
+  // Let gapCoeff = meldGapRatio (used for vertical gaps between rows)
+  // 3*tileH + 2*gapY ≤ availH
+  // with tileH = tileW/TILE_ASPECT and gapY = max(4, tileW*gapCoeff)
+  // Approximate: gapY ≈ tileW * gapCoeff (ignoring the max(4,...) for large tiles)
+  // => 3*(tileW/TILE_ASPECT) + 2*tileW*gapCoeff ≤ availH
+  // => tileW * (3/TILE_ASPECT + 2*gapCoeff) ≤ availH
+  // => tileW ≤ availH / (3/TILE_ASPECT + 2*gapCoeff)
+  
   const availH = Math.max(0, containerH - paddingV);
+  const gapCoeff = meldGapRatio;
+  const maxTileWFromHeight = availH / (3 / TILE_ASPECT + 2 * gapCoeff);
+  const capTileW = Math.max(ABS_MIN_TILE_W, Math.floor(maxTileWFromHeight));
 
-  // Binary search: largest tileW where BOTH (rows ≤ maxRows) AND (totalH ≤ availH)
-  let lo = minTileW, hi = maxTileW, best = -1;
+  // Binary search: find largest tileW ≤ capTileW where all melds fit in availH
+  let lo = ABS_MIN_TILE_W, hi = capTileW, best = ABS_MIN_TILE_W;
   let bestRows = 0, bestH = 0;
 
   while (lo <= hi) {
     const mid = Math.floor((lo + hi) / 2);
     const { rows, totalH } = computeBoardLayout(containerW, sets, mid, gapRatio, meldGapRatio, paddingH);
-    if (totalH <= availH && rows <= maxRows) {
-      best = mid; bestRows = rows; bestH = totalH;
+    if (totalH <= availH) {
+      best = mid;
+      bestRows = rows;
+      bestH = totalH;
       lo = mid + 1;
     } else {
       hi = mid - 1;
     }
   }
 
-  if (best >= minTileW) {
-    return {
-      tileW:    best,
-      tileH:    Math.round(best / TILE_ASPECT),
-      rows:     bestRows,
-      contentH: bestH,
-      overflow: false,
-    };
-  }
+  const overflow = bestH > availH;
 
-  // No fitting size — use minimum and scroll
-  const { rows, totalH } = computeBoardLayout(containerW, sets, minTileW, gapRatio, meldGapRatio, paddingH);
   return {
-    tileW:    minTileW,
-    tileH:    Math.round(minTileW / TILE_ASPECT),
-    rows,
-    contentH: totalH,
-    overflow: true,
+    tileW:    best,
+    tileH:    Math.round(best / TILE_ASPECT),
+    rows:     bestRows,
+    contentH: bestH,
+    overflow,
   };
 }
 
@@ -185,13 +192,13 @@ function computeRackFit(
   const availH = Math.max(0, containerH - paddingV);
   let lo = minTileW, hi = maxTileW, best = minTileW;
   while (lo <= hi) {
-    const mid  = Math.floor((lo + hi) / 2);
+    const mid = Math.floor((lo + hi) / 2);
     const tileH = mid / TILE_ASPECT;
     const gap   = Math.max(2, mid * gapRatio);
-    const availW  = containerW - paddingH;
-    const perRow  = Math.max(1, Math.floor((availW + gap) / (mid + gap)));
-    const rows    = Math.ceil(tileCount / perRow);
-    const totalH  = rows * tileH + (rows - 1) * gap;
+    const availW = containerW - paddingH;
+    const perRow = Math.max(1, Math.floor((availW + gap) / (mid + gap)));
+    const rows   = Math.ceil(tileCount / perRow);
+    const totalH = rows * tileH + (rows - 1) * gap;
     if (totalH <= availH) { best = mid; lo = mid + 1; }
     else                  { hi = mid - 1; }
   }
@@ -200,43 +207,22 @@ function computeRackFit(
 
 // ─── Hook ─────────────────────────────────────────────────────────────────────
 
-/**
- * Attaches a ResizeObserver to the returned containerRef (which must be placed
- * on the OUTER, fixed-size box).  Returns [ref, tileSize, needsScroll].
- *
- * Key design decisions to prevent the "only shrinks on other player's turn" bug:
- *
- *  1. We do NOT wrap recompute in useCallback.  Instead we store the latest
- *     containerSize in a ref and call a plain function on every render when
- *     opts change, so a board change always triggers a fresh computation.
- *
- *  2. The boardSets key is a full deep-ish fingerprint (id + tile-count for
- *     every set) so even moving tiles within a turn is detected.
- *
- *  3. The ResizeObserver only updates the stored container size and triggers
- *     a setState; the actual fit computation runs synchronously in a
- *     useLayoutEffect that depends on BOTH the container size AND the opts.
- */
 export function useFitTileSize(
   opts: FitOptions,
 ): [React.RefObject<HTMLDivElement | null>, TileSize, boolean] {
   const containerRef  = useRef<HTMLDivElement>(null);
-  // Stored latest container dimensions (updated by ResizeObserver)
   const containerSize = useRef<{ w: number; h: number }>({ w: 0, h: 0 });
-  // Trigger re-render when container dimensions change
   const [sizeTick, setSizeTick] = useState(0);
 
   const isRack = opts.mode === 'rack';
 
-  // ── resolved params ──────────────────────────────────────────────────────
-  const maxTileW     = opts.maxTileW     ?? (isRack ? MAX_TILE_W_RACK  : MAX_TILE_W_BOARD);
-  const minTileW     = opts.minTileW     ?? (isRack ? MIN_TILE_W_RACK  : MIN_TILE_W_BOARD);
+  const maxTileW     = opts.maxTileW     ?? (isRack ? 46 : 50);
+  const minTileW     = opts.minTileW     ?? (isRack ? 24 : ABS_MIN_TILE_W);
   const gapRatio     = opts.gapRatio     ?? 0.10;
   const meldGapRatio = isRack ? 0 : ((opts as BoardOptions).meldGapRatio ?? 0.35);
   const paddingH     = opts.paddingH     ?? 20;
   const paddingV     = opts.paddingV     ?? (isRack ? 36 : 48);
 
-  // ── ResizeObserver: only updates container size ──────────────────────────
   useEffect(() => {
     const el = containerRef.current;
     if (!el) return;
@@ -251,23 +237,17 @@ export function useFitTileSize(
       }
     });
     ro.observe(el);
-    // Seed with current size immediately
     containerSize.current = { w: el.clientWidth, h: el.clientHeight };
     setSizeTick(t => t + 1);
     return () => ro.disconnect();
-  }, []); // runs once — the ref stays stable
+  }, []);
 
-  // ── Compute result synchronously every render ────────────────────────────
-  // (useLayoutEffect so the result is ready before paint)
-  const [tileSize,    setTileSize]    = useState<TileSize>({ w: maxTileW, h: Math.round(maxTileW / TILE_ASPECT) });
+  const [tileSize, setTileSize] = useState<TileSize>({ w: maxTileW, h: Math.round(maxTileW / TILE_ASPECT) });
   const [needsScroll, setNeedsScroll] = useState(false);
 
-  // Build a stable-ish serialization of the board for the dep array
   const boardKey = isRack
     ? String((opts as RackOptions).tileCount)
-    : (opts as BoardOptions).sets
-        ?.map(s => `${s.id}:${s.tiles.length}`)
-        .join(',') ?? '';
+    : (opts as BoardOptions).sets?.map(s => `${s.id}:${s.tiles.length}`).join(',') ?? '';
 
   useLayoutEffect(() => {
     const { w: cW, h: cH } = containerSize.current;
@@ -282,18 +262,12 @@ export function useFitTileSize(
     }
 
     const { sets } = opts as BoardOptions;
-    const isSmall  = window.innerWidth < 480 || window.innerHeight < 700;
-    const maxRows  = isSmall ? MAX_ROWS_SMALL : MAX_ROWS_NORMAL;
-
     const r = computeBoardFit(cW, cH, sets ?? [], {
-      maxTileW, minTileW, gapRatio, meldGapRatio, paddingH, paddingV, maxRows,
+      gapRatio, meldGapRatio, paddingH, paddingV,
     });
 
     setTileSize(prev => (prev.w === r.tileW ? prev : { w: r.tileW, h: r.tileH }));
     setNeedsScroll(prev => (prev === r.overflow ? prev : r.overflow));
-  // sizeTick ensures we re-run when the container resizes
-  // boardKey ensures we re-run when the board content changes
-  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [sizeTick, boardKey, maxTileW, minTileW, gapRatio, meldGapRatio, paddingH, paddingV, isRack]);
 
   return [containerRef as React.RefObject<HTMLDivElement>, tileSize, needsScroll];
