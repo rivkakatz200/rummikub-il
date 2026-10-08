@@ -322,8 +322,8 @@ async function handleBotTurn(room: ServerRoom) {
 
     // 3. newRack must equal oldRack minus the tiles placed on the board
     const newRackIds = new Set(result.newRack.map(t => t.id));
-    const placedIds  = new Set(newBoardIds.filter(id => oldRackIds.has(id)));
-    const expectedRackIds = new Set([...oldRackIds].filter(id => !placedIds.has(id)));
+    const placedOnBoardIds  = new Set(newBoardIds.filter(id => oldRackIds.has(id)));
+    const expectedRackIds = new Set([...oldRackIds].filter(id => !placedOnBoardIds.has(id)));
     const rackMismatch =
       newRackIds.size !== expectedRackIds.size ||
       [...newRackIds].some(id => !expectedRackIds.has(id));
