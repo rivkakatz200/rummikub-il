@@ -1,0 +1,34 @@
+{
+  "id": "FEAT-001",
+  "type": "fix",
+  "description": "Bug A: Replace single lastAction with recentActions[] (8 entries, newest-first) and a monotonic turnCounter. Fix client highlight logic to show tiles placed by opponents since my last completed turn, regardless of whose turn it currently is. Independent of FEAT-002 except both touch server.ts and App.tsx — implement this first.",
+  "status": "completed",
+  "steps": [
+    "Step 1 — src/types/rummikub.ts: Add `recentActions: LastAction[]` field to the GameState interface. Keep `lastAction?: LastAction` for the action banner UI. No other changes to this file.",
+    "Step 2 — server.ts (ServerRoom interface): Add `turnCounter: number` and `recentActions: LastAction[]` fields to the ServerRoom interface (lines ~50-65 where the interface is defined).",
+    "Step 3 — server.ts (recordAction helper): Add a new function `recordAction(room: ServerRoom, action: Omit<LastAction, 'turnNumber'>): void` immediately after the `diffPlacedTileIds` function (~line 84). Implementation: increment room.turnCounter, set turnNumber = room.turnCounter, set room.lastAction = {...action, turnNumber}, unshift into room.recentActions, slice to keep only 8 entries.",
+    "Step 4 — server.ts (initialise new fields): In CREATE_ROOM handler add `turnCounter: 0, recentActions: []` to the room object literal. In START_GAME handler add `room.turnCounter = 0; room.recentActions = [];` after setting `room.lastAction = undefined`. In RESTART_GAME handler add the same two lines after `room.lastAction = undefined`.",
+    "Step 5 — server.ts (replace all lastAction assignments with recordAction calls): Replace the 5 direct `room.lastAction = { ..., turnNumber: room.roundNumber * 1000 + room.currentTurnIndex }` assignments in: (a) handleTurnTimeout, (b) handleBotTurn play path, (c) applyBotDraw, (d) FINISH_TURN handler, (e) DRAW_TILE handler. Each becomes `recordAction(room, { playerId, playerName, type, placedTileIds })` — omitting turnNumber since recordAction sets it.",
+    "Step 6 — server.ts (getSanitizedGameState): Add `recentActions: room.recentActions` to the returned GameState object.",
+    "Step 7 — src/App.tsx (myLastCompletedTurnNumberRef): Add `const myLastCompletedTurnNumberRef = useRef<number>(-1);` alongside the other refs near the top of the component.",
+    "Step 8 — src/App.tsx (update ref in ROOM_STATE handler): In `case 'ROOM_STATE'`, after `const currentPId = ...`, scan `newState.recentActions` for entries where `action.playerId === currentPId`. If any found, set `myLastCompletedTurnNumberRef.current` to the max turnNumber among them. This runs on every ROOM_STATE (idempotent — max only ever increases).",
+    "Step 9 — src/App.tsx (compute highlightedTileIds): Replace the existing inline expression passed to BoardView's `highlightedTileIds` prop (currently `!isMyTurn && gameState.lastAction?.type === 'play' ? new Set(gameState.lastAction.placedTileIds) : undefined`) with a computed value: iterate `gameState.recentActions`, collect `placedTileIds` from entries where `action.playerId !== myPlayerId && action.turnNumber > myLastCompletedTurnNumberRef.current && action.type === 'play'`. Return undefined if the resulting Set is empty."
+  ],
+  "acceptance_criteria": [
+    "npm run lint passes with no TypeScript errors",
+    "npm run typecheck:server passes with no TypeScript errors",
+    "npm run build completes successfully",
+    "recentActions[] is present and non-null in every ROOM_STATE message sent by the server (observable via test script or browser DevTools WS inspector)",
+    "turnNumber values in recentActions are monotonically increasing integers starting from 1 (not the old roundNumber * 1000 + index formula)",
+    "During an opponent's turn, tiles placed by any opponent after my last completed action are highlighted in turquoise on the board",
+    "During my own turn, previously-placed opponent tiles remain highlighted (the filter uses myLastCompletedTurnNumberRef, not isMyTurn)",
+    "A 'draw' action by an opponent produces no tile highlight (placedTileIds is empty)"
+  ],
+  "verification": [
+    "npm run lint",
+    "npm run typecheck:server",
+    "npm run build"
+  ],
+  "blocked_reason": null,
+  "findings": "Pre-existing lint errors in src/components/PlayerRack.tsx (missing 'mode' field in FitOptions) and src/hooks/useFitTileSize.ts (SetStateAction type mismatch) — not caused by FEAT-001 changes, files not touched. npm run build passes. FEAT-002 can proceed: server.ts and App.tsx are ready; the recentActions[] array is live and turnCounter is monotonic. Note: App.tsx still contains the placeholder tile logic in handleDrawTile (Tile with id 'drawing_placeholder_') and isDrawingAnimation — FEAT-002 (Bug B) should clean these up."
+}

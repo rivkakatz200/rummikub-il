@@ -53,6 +53,7 @@ export interface GameState {
   lastActionMessage?: string;
   lastAction?: LastAction;
   roundNumber: number;
+  recentActions: LastAction[];   // newest-first, up to 8 entries
 }
 
 export interface PlayerActionPayload {

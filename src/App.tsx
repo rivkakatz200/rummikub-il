@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { useState, useEffect, useRef, useCallback } from 'react';
+import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { GameState, Tile, TileSet, RoomSettings } from './types/rummikub';
 import { BoardView } from './components/BoardView';
 import { PlayerRack } from './components/PlayerRack';
@@ -91,6 +91,7 @@ export default function App() {
   const previousStatusRef = useRef<string | null>(null);
   const toastTimeoutRef = useRef<NodeJS.Timeout | null>(null);
   const reconnectTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+  const myLastCompletedTurnNumberRef = useRef<number>(-1);
 
   const showError = useCallback((msg: string) => {
     playErrorSound();
@@ -177,6 +178,18 @@ export default function App() {
             }
 
             const currentPId = myPlayerId || sessionStorage.getItem('rummi_my_player_id');
+
+            // Update myLastCompletedTurnNumberRef to the max turnNumber of my own actions
+            if (newState.recentActions?.length && currentPId) {
+              const myActions = newState.recentActions.filter(a => a.playerId === currentPId);
+              if (myActions.length > 0) {
+                const maxTurn = Math.max(...myActions.map(a => a.turnNumber));
+                if (maxTurn > myLastCompletedTurnNumberRef.current) {
+                  myLastCompletedTurnNumberRef.current = maxTurn;
+                }
+              }
+            }
+
             const myPlayer = newState.players.find((p) => p.id === currentPId);
             const isMyTurnNow =
               newState.status === 'playing' &&
@@ -316,6 +329,19 @@ export default function App() {
   const isMyTurn =
     gameState?.status === 'playing' &&
     gameState.players[gameState.currentTurnIndex]?.id === myPlayerId;
+
+  // Highlighted tiles: opponent tiles placed since my last completed turn
+  const highlightedTileIds = useMemo(() => {
+    if (!gameState?.recentActions?.length) return undefined;
+    const myLastTurn = myLastCompletedTurnNumberRef.current;
+    const ids = new Set<string>();
+    for (const action of gameState.recentActions) {
+      if (action.playerId !== myPlayerId && action.turnNumber > myLastTurn && action.type === 'play') {
+        for (const id of action.placedTileIds) ids.add(id);
+      }
+    }
+    return ids.size > 0 ? ids : undefined;
+  }, [gameState?.recentActions, myPlayerId]);
 
   // Broadcast board movement live
   const broadcastLiveBoard = (newBoard: TileSet[]) => {
@@ -1101,12 +1127,7 @@ export default function App() {
           isMyTurn={isMyTurn}
           poolCount={gameState.poolCount}
           selectedTile={selectedTile}
-          highlightedTileIds={
-            // Highlight opponent's last-placed tiles; never during my own turn
-            !isMyTurn && gameState.lastAction?.type === 'play'
-              ? new Set(gameState.lastAction.placedTileIds)
-              : undefined
-          }
+          highlightedTileIds={highlightedTileIds}
           onTileSelect={handleTileSelect}
           onMoveTileToSet={handleMoveTileToSet}
           onCreateNewSetWithTile={handleCreateNewSetWithTile}

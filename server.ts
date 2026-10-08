@@ -58,6 +58,8 @@ interface ServerRoom {
   winnerId?: string;
   lastActionMessage?: string;
   lastAction?: LastAction;
+  turnCounter: number;
+  recentActions: LastAction[];
   timerInterval?: NodeJS.Timeout | null;
   lastActivity: number;
 }
@@ -95,6 +97,17 @@ function diffPlacedTileIds(oldBoard: TileSet[], newBoard: TileSet[]): string[] {
   return newBoard.flatMap(s => s.tiles.map(t => t.id)).filter(id => !oldIds.has(id));
 }
 
+/** Records an action in room.lastAction and room.recentActions with a monotonic turnNumber. */
+function recordAction(room: ServerRoom, action: Omit<LastAction, 'turnNumber'>): void {
+  room.turnCounter++;
+  const entry: LastAction = { ...action, turnNumber: room.turnCounter };
+  room.lastAction = entry;
+  room.recentActions.unshift(entry);
+  if (room.recentActions.length > 8) {
+    room.recentActions = room.recentActions.slice(0, 8);
+  }
+}
+
 function getSanitizedGameState(room: ServerRoom, forPlayerId: string): GameState {
   return {
     roomId: room.id,
@@ -124,6 +137,7 @@ function getSanitizedGameState(room: ServerRoom, forPlayerId: string): GameState
     lastActionMessage: room.lastActionMessage,
     lastAction: room.lastAction,
     roundNumber: room.roundNumber,
+    recentActions: room.recentActions,
   };
 }
 
@@ -229,13 +243,12 @@ function handleTurnTimeout(room: ServerRoom) {
   } else {
     room.lastActionMessage = `הזמן של ${player.name} אזל! הלוח אופס.`;
   }
-  room.lastAction = {
+  recordAction(room, {
     playerId: player.id,
     playerName: player.name,
     type: 'draw',
     placedTileIds: [],
-    turnNumber: room.roundNumber * 1000 + room.currentTurnIndex,
-  };
+  });
 
   advanceToNextTurn(room);
 }
@@ -351,13 +364,12 @@ async function handleBotTurn(room: ServerRoom) {
     bot.rack   = result.newRack;
     bot.hasInitialMeld = true;
     room.lastActionMessage = `${bot.name} הוריד אריחים ללוח!`;
-    room.lastAction = {
+    recordAction(room, {
       playerId: bot.id,
       playerName: bot.name,
       type: 'play',
       placedTileIds: placedIds,
-      turnNumber: room.roundNumber * 1000 + room.currentTurnIndex,
-    };
+    });
 
     if (bot.rack.length === 0) {
       handlePlayerWin(room, bot);
@@ -378,13 +390,12 @@ function applyBotDraw(room: ServerRoom, bot: ServerPlayer): void {
   } else {
     room.lastActionMessage = `הקופה ריקה, ${bot.name} העביר את התור.`;
   }
-  room.lastAction = {
+  recordAction(room, {
     playerId: bot.id,
     playerName: bot.name,
     type: 'draw',
     placedTileIds: [],
-    turnNumber: room.roundNumber * 1000 + room.currentTurnIndex,
-  };
+  });
 }
 
 function handlePlayerWin(room: ServerRoom, winner: ServerPlayer) {
@@ -539,6 +550,8 @@ async function startServer() {
               roundNumber: 1,
               lastActionMessage: `חדר נוצר בהצלחה! קוד חדר: ${roomId}`,
               lastAction: undefined,
+              turnCounter: 0,
+              recentActions: [],
               lastActivity: Date.now(),
             };
 
@@ -801,6 +814,8 @@ async function startServer() {
             room.currentTurnIndex = 0;
             room.lastActionMessage = `המשחק התחיל! 14 אריחים חולקו לכל שחקן.`;
             room.lastAction = undefined;
+            room.turnCounter = 0;
+            room.recentActions = [];
 
             broadcastRoom(room);
             startTurnTimer(room);
@@ -833,6 +848,8 @@ async function startServer() {
             room.currentTurnIndex = (room.roundNumber - 1) % room.players.length;
             room.lastActionMessage = `סיבוב חדש מס' ${room.roundNumber} החל!`;
             room.lastAction = undefined;
+            room.turnCounter = 0;
+            room.recentActions = [];
 
             broadcastRoom(room);
             startTurnTimer(room);
@@ -950,13 +967,12 @@ async function startServer() {
             room.board = normalizedBoard;
             activePlayer.rack = cleanRack;
             room.lastActionMessage = `${activePlayer.name} ביצע מהלך בהצלחה!`;
-            room.lastAction = {
+            recordAction(room, {
               playerId: activePlayer.id,
               playerName: activePlayer.name,
               type: 'play',
               placedTileIds: placedIds,
-              turnNumber: room.roundNumber * 1000 + room.currentTurnIndex,
-            };
+            });
 
             if (activePlayer.rack.length === 0) {
               handlePlayerWin(room, activePlayer);
@@ -995,22 +1011,20 @@ async function startServer() {
                 activePlayer.rack.push(drawn);
               }
               room.lastActionMessage = `${activePlayer.name} לקח אריח מהקופה.`;
-              room.lastAction = {
+              recordAction(room, {
                 playerId: activePlayer.id,
                 playerName: activePlayer.name,
                 type: 'draw',
                 placedTileIds: [],
-                turnNumber: room.roundNumber * 1000 + room.currentTurnIndex,
-              };
+              });
             } else {
               room.lastActionMessage = `הקופה ריקה! ${activePlayer.name} העביר את התור.`;
-              room.lastAction = {
+              recordAction(room, {
                 playerId: activePlayer.id,
                 playerName: activePlayer.name,
                 type: 'draw',
                 placedTileIds: [],
-                turnNumber: room.roundNumber * 1000 + room.currentTurnIndex,
-              };
+              });
             }
 
             advanceToNextTurn(room);
