@@ -31,6 +31,14 @@ export interface RoomSettings {
   minInitialMeld: number; // default 30
 }
 
+export interface LastAction {
+  playerId: string;
+  playerName: string;
+  type: 'play' | 'draw';
+  placedTileIds: string[];  // IDs of tiles moved from rack→board this turn (empty for draw)
+  turnNumber: number;
+}
+
 export interface GameState {
   roomId: string;
   status: 'waiting' | 'playing' | 'round_end';
@@ -43,6 +51,7 @@ export interface GameState {
   minInitialMeld: number;
   winnerId?: string;
   lastActionMessage?: string;
+  lastAction?: LastAction;
   roundNumber: number;
 }
 

@@ -25,7 +25,6 @@ import {
   toggleSound,
   isSoundEnabled,
 } from './utils/audio';
-import { autoMergeBoardSets } from './utils/rummikubRules';
 import {
   BookOpen,
   Volume2,
@@ -682,14 +681,6 @@ export default function App() {
     playTileClick();
   };
 
-  const handleAutoMergeSets = () => {
-    if (!isMyTurn) return;
-    const merged = autoMergeBoardSets(localBoard);
-    setLocalBoard(merged);
-    broadcastLiveBoard(merged);
-    playTilePlace();
-  };
-
   const handleSplitSet = (setId: string, atIndex: number) => {
     if (!isMyTurn) return;
     playTileClick();
@@ -1080,6 +1071,29 @@ export default function App() {
         ))}
       </div>
 
+      {/* Last action banner — shows what the previous player did */}
+      {gameState.lastAction && (
+        <div className="w-full shrink-0 mb-1 flex items-center gap-1.5 px-2 py-0.5 rounded-lg bg-stone-900/70 border border-stone-800 text-stone-300" style={{ fontSize: 11 }}>
+          {gameState.lastAction.type === 'draw' ? (
+            <>
+              <span className="text-sky-400 text-base">🃏</span>
+              <span>
+                <span className="font-bold text-stone-100">{gameState.lastAction.playerName}</span>
+                {' לקח קלף מהקופה'}
+              </span>
+            </>
+          ) : (
+            <>
+              <span className="text-emerald-400 text-base">🀱</span>
+              <span>
+                <span className="font-bold text-stone-100">{gameState.lastAction.playerName}</span>
+                {` הניח ${gameState.lastAction.placedTileIds.length} קלפים`}
+              </span>
+            </>
+          )}
+        </div>
+      )}
+
       {/* Board — takes all remaining space, guaranteed ≥40dvh so bottom area never squeezes it */}
       <div className="flex-1 min-h-0 w-full relative mb-1 flex flex-col" style={{ minHeight: 'min(40dvh, 40vh)' }}>
         <BoardView
@@ -1087,6 +1101,12 @@ export default function App() {
           isMyTurn={isMyTurn}
           poolCount={gameState.poolCount}
           selectedTile={selectedTile}
+          highlightedTileIds={
+            // Highlight opponent's last-placed tiles; never during my own turn
+            !isMyTurn && gameState.lastAction?.type === 'play'
+              ? new Set(gameState.lastAction.placedTileIds)
+              : undefined
+          }
           onTileSelect={handleTileSelect}
           onMoveTileToSet={handleMoveTileToSet}
           onCreateNewSetWithTile={handleCreateNewSetWithTile}
@@ -1094,7 +1114,6 @@ export default function App() {
           onDropTile={handleDropOnBoard}
           onDrawTileFromPool={handleDrawTile}
           onReturnSetToRack={handleReturnSetToRack}
-          onAutoMergeSets={handleAutoMergeSets}
         />
       </div>
 

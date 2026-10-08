@@ -2,7 +2,7 @@ import React, { useState, useRef, useCallback, useEffect } from 'react';
 import { Tile, TileSet } from '../types/rummikub';
 import { TileView, FaceDownTile } from './TileView';
 import { validateSet } from '../utils/rummikubRules';
-import { Plus, Check, AlertTriangle, Layers, Undo2, Sparkles } from 'lucide-react';
+import { Plus, Check, AlertTriangle, Layers, Undo2 } from 'lucide-react';
 import { playTileClick, playTilePlace } from '../utils/audio';
 import { useFitTileSize, computeBoardLayout } from '../hooks/useFitTileSize';
 
@@ -18,7 +18,7 @@ interface BoardViewProps {
   onDropTile: (e: React.DragEvent, targetSetId?: string, targetIndex?: number) => void;
   onDrawTileFromPool: () => void;
   onReturnSetToRack?: (setId: string) => void;
-  onAutoMergeSets?: () => void;
+  highlightedTileIds?: Set<string>;
 }
 
 const AUTO_SCROLL_ZONE  = 48;
@@ -38,7 +38,7 @@ export const BoardView: React.FC<BoardViewProps> = ({
   onDropTile,
   onDrawTileFromPool,
   onReturnSetToRack,
-  onAutoMergeSets,
+  highlightedTileIds,
 }) => {
   const [dropIndicator, setDropIndicator] = useState<{ setId: string; index: number } | null>(null);
   const [lastModifiedSetId, setLastModifiedSetId] = useState<string | null>(null);
@@ -187,17 +187,6 @@ export const BoardView: React.FC<BoardViewProps> = ({
         </div>
 
         <div className="flex items-center gap-1.5">
-          {isMyTurn && board.length >= 2 && onAutoMergeSets && (
-            <button
-              onClick={() => { playTilePlace(); onAutoMergeSets!(); }}
-              className="px-2 py-1 rounded-xl bg-stone-900/90 hover:bg-stone-800 text-amber-300 hover:text-amber-200 border border-amber-500/40 font-bold flex items-center gap-1 shadow transition active:scale-95"
-              style={{ fontSize: 11 }}
-            >
-              <Sparkles className="w-3 h-3 text-amber-400" />
-              <span className="hidden sm:inline">אחד סדרות</span>
-              <span className="sm:hidden">אחד</span>
-            </button>
-          )}
           {isMyTurn && (
             <button
               onClick={() => { playTilePlace(); onCreateNewSetWithTile(); }}
@@ -313,6 +302,7 @@ export const BoardView: React.FC<BoardViewProps> = ({
                           <div className="relative" onDragOver={handleDragOver} onDrop={(e) => { e.stopPropagation(); handleDrop(e, set.id, idx); }}>
                             <TileView
                               tile={tile} tileW={tW} tileH={tH} isSelected={isSelected}
+                              isHighlighted={highlightedTileIds?.has(tile.id) ?? false}
                               onClick={() => {
                                 if (!isMyTurn) return;
                                 playTileClick();

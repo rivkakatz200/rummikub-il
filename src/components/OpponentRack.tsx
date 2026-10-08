@@ -59,8 +59,6 @@ export const OpponentRack: React.FC<OpponentRackProps> = ({
         <div className="flex items-center gap-1 text-stone-400" style={{ fontSize: 10 }}>
           <span className="font-mono text-amber-400 font-bold">{player.score}נק׳</span>
           <span>•</span>
-          <span className="font-mono text-stone-300">{player.tileCount}🀱</span>
-          <span>•</span>
           <span className={player.hasInitialMeld ? 'text-emerald-400' : 'text-stone-500'}>
             {player.hasInitialMeld ? 'פתח' : 'טרם'}
           </span>

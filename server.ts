@@ -10,6 +10,7 @@ import {
   GameState,
   Player,
   RoomSettings,
+  LastAction,
 } from './src/types/rummikub.js';
 import {
   createFullDeck,
@@ -56,6 +57,7 @@ interface ServerRoom {
   roundNumber: number;
   winnerId?: string;
   lastActionMessage?: string;
+  lastAction?: LastAction;
   timerInterval?: NodeJS.Timeout | null;
   lastActivity: number;
 }
@@ -87,6 +89,12 @@ function generateRoomCode(): string {
   return code;
 }
 
+/** Returns the IDs of tiles that appear on newBoard but not on oldBoard. */
+function diffPlacedTileIds(oldBoard: TileSet[], newBoard: TileSet[]): string[] {
+  const oldIds = new Set(oldBoard.flatMap(s => s.tiles.map(t => t.id)));
+  return newBoard.flatMap(s => s.tiles.map(t => t.id)).filter(id => !oldIds.has(id));
+}
+
 function getSanitizedGameState(room: ServerRoom, forPlayerId: string): GameState {
   return {
     roomId: room.id,
@@ -97,10 +105,13 @@ function getSanitizedGameState(room: ServerRoom, forPlayerId: string): GameState
       avatar: p.avatar,
       isHost: p.isHost,
       isBot: p.isBot,
-      tileCount: p.rack.length,
+      // PRIVACY: never reveal opponents' tile count during an active game.
+      // At round_end we do expose it (penalty calculation shown to all).
+      tileCount: (room.status === 'round_end' || p.id === forPlayerId) ? p.rack.length : 0,
       hasInitialMeld: p.hasInitialMeld,
       score: p.score,
       isConnected: p.isConnected,
+      // PRIVACY: only send the requesting player's own rack
       rack: p.id === forPlayerId ? p.rack : undefined,
     })),
     currentTurnIndex: room.currentTurnIndex,
@@ -111,6 +122,7 @@ function getSanitizedGameState(room: ServerRoom, forPlayerId: string): GameState
     minInitialMeld: room.settings.minInitialMeld,
     winnerId: room.winnerId,
     lastActionMessage: room.lastActionMessage,
+    lastAction: room.lastAction,
     roundNumber: room.roundNumber,
   };
 }
@@ -217,6 +229,13 @@ function handleTurnTimeout(room: ServerRoom) {
   } else {
     room.lastActionMessage = `הזמן של ${player.name} אזל! הלוח אופס.`;
   }
+  room.lastAction = {
+    playerId: player.id,
+    playerName: player.name,
+    type: 'draw',
+    placedTileIds: [],
+    turnNumber: room.roundNumber * 1000 + room.currentTurnIndex,
+  };
 
   advanceToNextTurn(room);
 }
@@ -327,10 +346,18 @@ async function handleBotTurn(room: ServerRoom) {
     }
 
     // ── Apply validated move ───────────────────────────────────────────────
+    const placedIds = diffPlacedTileIds(room.board, result.newBoard);
     room.board = result.newBoard;
     bot.rack   = result.newRack;
     bot.hasInitialMeld = true;
     room.lastActionMessage = `${bot.name} הוריד אריחים ללוח!`;
+    room.lastAction = {
+      playerId: bot.id,
+      playerName: bot.name,
+      type: 'play',
+      placedTileIds: placedIds,
+      turnNumber: room.roundNumber * 1000 + room.currentTurnIndex,
+    };
 
     if (bot.rack.length === 0) {
       handlePlayerWin(room, bot);
@@ -349,9 +376,15 @@ function applyBotDraw(room: ServerRoom, bot: ServerPlayer): void {
     bot.rack.push(drawn);
     room.lastActionMessage = `${bot.name} לקח אריח מהקופה.`;
   } else {
-    // Pool empty — pass the turn without crashing
     room.lastActionMessage = `הקופה ריקה, ${bot.name} העביר את התור.`;
   }
+  room.lastAction = {
+    playerId: bot.id,
+    playerName: bot.name,
+    type: 'draw',
+    placedTileIds: [],
+    turnNumber: room.roundNumber * 1000 + room.currentTurnIndex,
+  };
 }
 
 function handlePlayerWin(room: ServerRoom, winner: ServerPlayer) {
@@ -505,6 +538,7 @@ async function startServer() {
               pool: [],
               roundNumber: 1,
               lastActionMessage: `חדר נוצר בהצלחה! קוד חדר: ${roomId}`,
+              lastAction: undefined,
               lastActivity: Date.now(),
             };
 
@@ -766,6 +800,7 @@ async function startServer() {
             room.winnerId = undefined;
             room.currentTurnIndex = 0;
             room.lastActionMessage = `המשחק התחיל! 14 אריחים חולקו לכל שחקן.`;
+            room.lastAction = undefined;
 
             broadcastRoom(room);
             startTurnTimer(room);
@@ -797,6 +832,7 @@ async function startServer() {
             room.roundNumber++;
             room.currentTurnIndex = (room.roundNumber - 1) % room.players.length;
             room.lastActionMessage = `סיבוב חדש מס' ${room.roundNumber} החל!`;
+            room.lastAction = undefined;
 
             broadcastRoom(room);
             startTurnTimer(room);
@@ -909,10 +945,18 @@ async function startServer() {
               };
             });
 
-            // Valid turn
+            // Valid turn — compute which tiles were newly placed
+            const placedIds = diffPlacedTileIds(room.initialBoardSnapshot, normalizedBoard);
             room.board = normalizedBoard;
             activePlayer.rack = cleanRack;
             room.lastActionMessage = `${activePlayer.name} ביצע מהלך בהצלחה!`;
+            room.lastAction = {
+              playerId: activePlayer.id,
+              playerName: activePlayer.name,
+              type: 'play',
+              placedTileIds: placedIds,
+              turnNumber: room.roundNumber * 1000 + room.currentTurnIndex,
+            };
 
             if (activePlayer.rack.length === 0) {
               handlePlayerWin(room, activePlayer);
@@ -943,10 +987,30 @@ async function startServer() {
 
             if (room.pool.length > 0) {
               const drawn = room.pool.pop()!;
-              activePlayer.rack.push(drawn);
+              // Safety: validate drawn tile before giving to player
+              if (!drawn || typeof drawn.number !== 'number' || drawn.number < 0 || drawn.number > 13 || !drawn.id || !drawn.color) {
+                console.error(`[DRAW_TILE] Invalid tile in pool for room ${room.id}:`, drawn);
+                // Skip the bad tile; don't add it to the rack
+              } else {
+                activePlayer.rack.push(drawn);
+              }
               room.lastActionMessage = `${activePlayer.name} לקח אריח מהקופה.`;
+              room.lastAction = {
+                playerId: activePlayer.id,
+                playerName: activePlayer.name,
+                type: 'draw',
+                placedTileIds: [],
+                turnNumber: room.roundNumber * 1000 + room.currentTurnIndex,
+              };
             } else {
               room.lastActionMessage = `הקופה ריקה! ${activePlayer.name} העביר את התור.`;
+              room.lastAction = {
+                playerId: activePlayer.id,
+                playerName: activePlayer.name,
+                type: 'draw',
+                placedTileIds: [],
+                turnNumber: room.roundNumber * 1000 + room.currentTurnIndex,
+              };
             }
 
             advanceToNextTurn(room);

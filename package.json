@@ -12,7 +12,8 @@
     "lint": "tsc --noEmit",
     "test:bot": "tsx scripts/testGeminiBot.ts",
     "test:solver": "tsx scripts/testSolver.ts",
-    "test:layout": "tsx scripts/testBoardLayout.ts"
+    "test:layout": "tsx scripts/testBoardLayout.ts",
+    "test:pool": "tsx scripts/testPool.ts"
   },
   "dependencies": {
     "@google/genai": "^2.4.0",

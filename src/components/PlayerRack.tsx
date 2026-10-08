@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { Tile } from '../types/rummikub';
-import { TileView } from './TileView';
+import { TileView, FaceDownTile } from './TileView';
 import { sortRackByNumbers, sortRackByRuns, validateSet } from '../utils/rummikubRules';
 import { Sparkles, ArrowUpDown, Plus, CheckCircle2, X } from 'lucide-react';
 import { playTileClick, playTilePlace } from '../utils/audio';
@@ -85,6 +85,8 @@ export const PlayerRack: React.FC<PlayerRackProps> = ({
       multiSelectedIds.includes(tile.id) ||
       (selectedTile?.source === 'rack' && selectedTile.tile.id === tile.id);
     const isDropTarget = dragOverIndex === idx;
+    // Placeholder tile from optimistic draw — show as face-down until real tile arrives
+    const isPlaceholder = tile.id.startsWith('drawing_placeholder_');
 
     return (
       <div
@@ -109,19 +111,23 @@ export const PlayerRack: React.FC<PlayerRackProps> = ({
         className={`transition-all duration-150 relative${isDropTarget ? ' scale-105' : ''}`}
         style={isDropTarget ? { borderRight: `2px solid #fbbf24`, paddingRight: 2 } : undefined}
       >
-        <TileView
-          tile={tile}
-          tileW={tW}
-          tileH={tH}
-          isSelected={isSelected}
-          onClick={() => { playTileClick(); handleToggleTileSelection(tile, idx); }}
-          onDragStart={(e) => {
-            e.dataTransfer.setData(
-              'application/json',
-              JSON.stringify({ tile, source: 'rack', fromIndex: idx })
-            );
-          }}
-        />
+        {isPlaceholder ? (
+          <FaceDownTile tileW={tW} tileH={tH} />
+        ) : (
+          <TileView
+            tile={tile}
+            tileW={tW}
+            tileH={tH}
+            isSelected={isSelected}
+            onClick={() => { playTileClick(); handleToggleTileSelection(tile, idx); }}
+            onDragStart={(e) => {
+              e.dataTransfer.setData(
+                'application/json',
+                JSON.stringify({ tile, source: 'rack', fromIndex: idx })
+              );
+            }}
+          />
+        )}
       </div>
     );
   };

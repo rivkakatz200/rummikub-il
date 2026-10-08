@@ -6,6 +6,7 @@ interface TileViewProps {
   tile: Tile;
   isSelected?: boolean;
   isDragOver?: boolean;
+  isHighlighted?: boolean;  // opponent's last-placed tile highlight
   onClick?: () => void;
   onDragStart?: (e: React.DragEvent) => void;
   /** Dynamic pixel size from useFitTileSize. Overrides `size` when provided. */
@@ -33,6 +34,7 @@ export const TileView: React.FC<TileViewProps> = ({
   tile,
   isSelected = false,
   isDragOver = false,
+  isHighlighted = false,
   onClick,
   onDragStart,
   tileW: propW,
@@ -60,7 +62,8 @@ export const TileView: React.FC<TileViewProps> = ({
       style={{ width: w, height: h, transition: 'width 0.15s ease, height 0.15s ease', touchAction: 'none' }}
       className={`rummi-tile flex flex-col items-center justify-between py-[3px] px-[2px] select-none cursor-pointer relative shrink-0${
         isSelected ? ' selected' : ''
-      }${isDragOver ? ' drag-over' : ''}`}
+      }${isDragOver ? ' drag-over' : ''
+      }${isHighlighted ? ' highlighted-tile' : ''}`}
       title={tile.isJoker ? "ג'וקר (מחליף כל אריח)" : `${tile.number} (${getColorHebrew(tile.color)})`}
     >
       {/* Top dot */}
