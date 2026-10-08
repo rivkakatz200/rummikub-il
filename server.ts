@@ -502,6 +502,9 @@ async function startServer() {
                 });
                 broadcastRoom(targetRoom);
               }
+            } else {
+              console.log('[RECONNECT_SESSION] room not found:', message.roomId);
+              ws.send(JSON.stringify({ type: 'ERROR', code: 'room_not_found', message: 'החדר לא נמצא. המשחק אבד.' }));
             }
             break;
           }
@@ -885,7 +888,16 @@ async function startServer() {
             if (!targetRoomId || !targetPlayerId) return;
 
             const room = rooms.get(targetRoomId);
-            if (!room || room.status !== 'playing') return;
+            if (!room) {
+              console.log('[FINISH_TURN] room not found:', targetRoomId);
+              ws.send(JSON.stringify({ type: 'ERROR', code: 'room_not_found', message: 'החדר לא נמצא. המשחק אבד.' }));
+              return;
+            }
+            if (room.status !== 'playing') {
+              console.log('[FINISH_TURN] room not playing:', room.status);
+              ws.send(JSON.stringify({ type: 'ERROR', code: 'not_your_turn', message: 'המשחק אינו פעיל כרגע.' }));
+              return;
+            }
 
             const activePlayer = room.players[room.currentTurnIndex];
             if (activePlayer.id !== targetPlayerId) {
@@ -989,11 +1001,21 @@ async function startServer() {
             if (!targetRoomId || !targetPlayerId) return;
 
             const room = rooms.get(targetRoomId);
-            if (!room || room.status !== 'playing') return;
+            if (!room) {
+              console.log('[DRAW_TILE] room not found:', targetRoomId);
+              ws.send(JSON.stringify({ type: 'ERROR', code: 'room_not_found', message: 'החדר לא נמצא. המשחק אבד.' }));
+              return;
+            }
+            if (room.status !== 'playing') {
+              console.log('[DRAW_TILE] room not playing:', room.status);
+              ws.send(JSON.stringify({ type: 'ERROR', code: 'not_your_turn', message: 'המשחק אינו פעיל כרגע.' }));
+              return;
+            }
 
             const activePlayer = room.players[room.currentTurnIndex];
             if (activePlayer.id !== targetPlayerId) {
-              ws.send(JSON.stringify({ type: 'ERROR', message: 'זהו אינו תורך!' }));
+              console.log('[DRAW_TILE] not your turn:', targetPlayerId);
+              ws.send(JSON.stringify({ type: 'ERROR', code: 'not_your_turn', message: 'זהו אינו תורך!' }));
               return;
             }
 
@@ -1037,10 +1059,23 @@ async function startServer() {
             if (!targetRoomId || !targetPlayerId) return;
 
             const room = rooms.get(targetRoomId);
-            if (!room || room.status !== 'playing') return;
+            if (!room) {
+              console.log('[RESET_TURN] room not found:', targetRoomId);
+              ws.send(JSON.stringify({ type: 'ERROR', code: 'room_not_found', message: 'החדר לא נמצא. המשחק אבד.' }));
+              return;
+            }
+            if (room.status !== 'playing') {
+              console.log('[RESET_TURN] room not playing:', room.status);
+              ws.send(JSON.stringify({ type: 'ERROR', code: 'not_your_turn', message: 'המשחק אינו פעיל כרגע.' }));
+              return;
+            }
 
             const activePlayer = room.players[room.currentTurnIndex];
-            if (activePlayer.id !== targetPlayerId) return;
+            if (activePlayer.id !== targetPlayerId) {
+              console.log('[RESET_TURN] not your turn:', targetPlayerId);
+              ws.send(JSON.stringify({ type: 'ERROR', code: 'not_your_turn', message: 'זהו אינו תורך!' }));
+              return;
+            }
 
             room.board = JSON.parse(JSON.stringify(room.initialBoardSnapshot));
             activePlayer.rack = JSON.parse(JSON.stringify(room.initialRackSnapshot));
@@ -1130,6 +1165,15 @@ async function startServer() {
 
   // REST API Endpoints for redundancy & health
   const { geminiConfigured, geminiModel } = getGeminiConfig();
+
+  // App-level PING heartbeat: send { type: 'PING' } to all open clients every 25s
+  setInterval(() => {
+    wss.clients.forEach((client) => {
+      if (client.readyState === WebSocket.OPEN) {
+        client.send(JSON.stringify({ type: 'PING' }));
+      }
+    });
+  }, 25000);
 
   app.get('/api/health', (_req, res) => {
     res.json({

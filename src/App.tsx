@@ -74,6 +74,9 @@ export default function App() {
 
   // Draw animation state (Requirement 1)
   const [isDrawingAnimation, setIsDrawingAnimation] = useState(false);
+  const [isDrawPending, setIsDrawPending] = useState(false);
+  const drawPendingTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+  const lastReceivedAtRef = useRef<number>(Date.now());
 
   // URL room code directly on mount
   const [urlRoomCode, setUrlRoomCode] = useState<string>(() => {
@@ -104,6 +107,7 @@ export default function App() {
 
   // Connect WebSocket with robust reconnection & session resume
   const connectWebSocket = useCallback(() => {
+    if (ws && ws.readyState === WebSocket.OPEN) return;
     const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
     const wsUrl = `${protocol}//${window.location.host}/ws`;
     const socket = new WebSocket(wsUrl);
@@ -131,6 +135,7 @@ export default function App() {
     socket.onmessage = (event) => {
       try {
         const msg = JSON.parse(event.data);
+        lastReceivedAtRef.current = Date.now();
         switch (msg.type) {
           case 'ROOM_CREATED': {
             setMyPlayerId(msg.playerId);
@@ -171,6 +176,8 @@ export default function App() {
           }
 
           case 'ROOM_STATE': {
+            setIsDrawPending(false);
+            if (drawPendingTimeoutRef.current) clearTimeout(drawPendingTimeoutRef.current);
             const newState: GameState = msg.state;
             setGameState(newState);
             if (newState.roomId) {
@@ -230,6 +237,21 @@ export default function App() {
                 setInitialTurnRack(myPlayer.rack);
               }
             }
+
+            // Rack integrity check: detect corrupted tiles and request resync
+            if (myPlayer?.rack) {
+              const badTiles = myPlayer.rack.filter(
+                t => !t.isJoker && (typeof t.number !== 'number' || t.number < 1 || t.number > 13 || !t.color)
+              );
+              if (badTiles.length > 0) {
+                console.warn('[ROOM_STATE] bad tiles in rack, requesting resync:', badTiles);
+                const savedRoom = newState.roomId;
+                const savedPId = currentPId;
+                if (socket.readyState === WebSocket.OPEN && savedRoom && savedPId) {
+                  socket.send(JSON.stringify({ type: 'RECONNECT_SESSION', roomId: savedRoom, playerId: savedPId }));
+                }
+              }
+            }
             break;
           }
 
@@ -259,7 +281,24 @@ export default function App() {
           }
 
           case 'ERROR': {
+            setIsDrawPending(false);
+            if (drawPendingTimeoutRef.current) clearTimeout(drawPendingTimeoutRef.current);
             showError(msg.message);
+            if (msg.code === 'room_not_found') {
+              sessionStorage.removeItem('rummi_current_room_id');
+              sessionStorage.removeItem('rummi_my_player_id');
+              setMyPlayerId(null);
+              setGameState(null);
+            }
+            break;
+          }
+
+          case 'PING': {
+            socket.send(JSON.stringify({ type: 'PONG' }));
+            break;
+          }
+
+          case 'PONG': {
             break;
           }
         }
@@ -290,6 +329,36 @@ export default function App() {
       if (reconnectTimeoutRef.current) clearTimeout(reconnectTimeoutRef.current);
     };
   }, [connectWebSocket]);
+
+  // Dead-socket detector: if no message received in 45s, reconnect
+  useEffect(() => {
+    const interval = setInterval(() => {
+      if (Date.now() - lastReceivedAtRef.current > 45000) {
+        if (!isExplicitlyLeavingRef.current) connectWebSocket();
+      }
+    }, 10000);
+    return () => clearInterval(interval);
+  }, [connectWebSocket]);
+
+  // Visibility + online resync
+  useEffect(() => {
+    const onVisible = () => {
+      if (document.visibilityState === 'visible' && !isExplicitlyLeavingRef.current) {
+        if (!ws || ws.readyState !== WebSocket.OPEN) connectWebSocket();
+      }
+    };
+    const onOnline = () => {
+      if (!isExplicitlyLeavingRef.current) {
+        if (!ws || ws.readyState !== WebSocket.OPEN) connectWebSocket();
+      }
+    };
+    document.addEventListener('visibilitychange', onVisible);
+    window.addEventListener('online', onOnline);
+    return () => {
+      document.removeEventListener('visibilitychange', onVisible);
+      window.removeEventListener('online', onOnline);
+    };
+  }, [ws, connectWebSocket]);
 
   // Dual-Sync Heartbeat Polling
   useEffect(() => {
@@ -878,7 +947,12 @@ export default function App() {
 
   // Draw tile with smooth animation (Requirement 1)
   const handleDrawTile = () => {
-    if (!ws || ws.readyState !== WebSocket.OPEN || !isMyTurn) return;
+    if (!ws || ws.readyState !== WebSocket.OPEN) {
+      connectWebSocket();
+      showError('מתחבר מחדש...');
+      return;
+    }
+    if (!isMyTurn) return;
 
     playDrawTile();
     setIsDrawingAnimation(true);
@@ -886,16 +960,13 @@ export default function App() {
       setIsDrawingAnimation(false);
     }, 650);
 
-    // Optimistic UI: add a face-down placeholder tile immediately so the rack
-    // count updates before the server round-trip completes.
-    // The real tile arrives with the next ROOM_STATE and replaces this.
-    const placeholder: Tile = {
-      id: `drawing_placeholder_${Date.now()}`,
-      color: 'black',
-      number: 0,
-      isJoker: false,
-    };
-    setLocalRack((prev) => [...prev, placeholder]);
+    setIsDrawPending(true);
+    if (drawPendingTimeoutRef.current) clearTimeout(drawPendingTimeoutRef.current);
+    drawPendingTimeoutRef.current = setTimeout(() => {
+      setIsDrawPending(false);
+      showError('אין תגובה מהשרת, מתחבר מחדש...');
+      connectWebSocket();
+    }, 4000);
 
     ws.send(
       JSON.stringify({
@@ -1154,6 +1225,7 @@ export default function App() {
           onFinishTurn={handleFinishTurn}
           onDrawTile={handleDrawTile}
           onResetTurn={handleResetTurn}
+          isDrawPending={isDrawPending}
         />
 
         {/* 2-Tier Wooden Player Rack with Drag-and-Drop manual sorting (Requirement 3) */}

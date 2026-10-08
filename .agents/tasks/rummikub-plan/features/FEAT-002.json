@@ -1,0 +1,48 @@
+{
+  "id": "FEAT-002",
+  "type": "fix",
+  "description": "Bug B: Fix dead-socket placeholder tile. Remove optimistic rack placeholder, add isDrawPending state with 4s timeout, add explicit ERROR responses on server for all silent-failure paths, add app-level PING (server→client every 25s) with client PONG reply, add 45s dead-socket detector, add visibility/online resync triggers, fix RECONNECT_SESSION when room is gone. Depends on FEAT-001 being committed first (both edit server.ts and App.tsx; no logical dependency but ordering prevents merge conflicts).",
+  "status": "completed",
+  "steps": [
+    "Step 1 — server.ts (explicit errors for DRAW_TILE silent failures): In `case 'DRAW_TILE'`, split the `if (!room || room.status !== 'playing') return;` guard into two: (a) `if (!room) { console.log('[DRAW_TILE] room not found:', targetRoomId); ws.send(JSON.stringify({ type: 'ERROR', code: 'room_not_found', message: 'החדר לא נמצא. המשחק אבד.' })); return; }` (b) `if (room.status !== 'playing') { console.log('[DRAW_TILE] room not playing:', room.status); ws.send(JSON.stringify({ type: 'ERROR', code: 'not_your_turn', message: 'המשחק אינו פעיל כרגע.' })); return; }`. Add `code: 'not_your_turn'` field to the existing `activePlayer.id !== targetPlayerId` ERROR send, and add `console.log('[DRAW_TILE] not your turn:', targetPlayerId)` before it.",
+    "Step 2 — server.ts (explicit errors for FINISH_TURN silent failures): Split `if (!room || room.status !== 'playing') return;` in `case 'FINISH_TURN'` the same way as step 1 (room_not_found + not_your_turn). Add console.log for each.",
+    "Step 3 — server.ts (explicit errors for RESET_TURN silent failures): Split `if (!room || room.status !== 'playing') return;` in `case 'RESET_TURN'` the same way. Replace the silent `if (activePlayer.id !== targetPlayerId) return;` with an ERROR send + log.",
+    "Step 4 — server.ts (RECONNECT_SESSION when room is gone): In `case 'RECONNECT_SESSION'`, after the outer `if (targetRoomCode && rooms.has(targetRoomCode))` block ends, add an `else` branch that sends `{ type: 'ERROR', code: 'room_not_found', message: 'החדר לא נמצא. המשחק אבד.' }` to the connecting client.",
+    "Step 5 — server.ts (app-level PING): In `startServer()`, after `wss.on('connection', ...)` block (around line where `app.get('/api/health', ...)` is defined), add a setInterval that sends `{ type: 'PING' }` to all open clients every 25 seconds: `setInterval(() => { wss.clients.forEach(client => { if (client.readyState === WebSocket.OPEN) client.send(JSON.stringify({ type: 'PING' })); }); }, 25000);`",
+    "Step 6 — src/App.tsx (remove optimistic placeholder): In `handleDrawTile`, delete the three lines that create and inject the placeholder tile: `const placeholder: Tile = { id: 'drawing_placeholder_...', ... }` and `setLocalRack(prev => [...prev, placeholder])`. Keep `setIsDrawingAnimation(true)` and the setTimeout that clears it — the visual animation is not a layout change.",
+    "Step 7 — src/App.tsx (isDrawPending state + drawPendingTimeoutRef): Add `const [isDrawPending, setIsDrawPending] = useState(false);` and `const drawPendingTimeoutRef = useRef<NodeJS.Timeout | null>(null);` near the other state declarations.",
+    "Step 8 — src/App.tsx (handleDrawTile guard + pending logic): At the top of `handleDrawTile`, add: `if (!ws || ws.readyState !== WebSocket.OPEN) { connectWebSocket(); showError('מתחבר מחדש...'); return; }`. After `ws.send(...)` for DRAW_TILE: set `setIsDrawPending(true)`, clear any existing drawPendingTimeoutRef, start a new 4000ms timeout that calls `setIsDrawPending(false); showError('אין תגובה מהשרת, מתחבר מחדש...'); connectWebSocket();`.",
+    "Step 9 — src/App.tsx (clear isDrawPending on ROOM_STATE and ERROR): In `case 'ROOM_STATE'`, at the very top of the case block, add: `setIsDrawPending(false); if (drawPendingTimeoutRef.current) clearTimeout(drawPendingTimeoutRef.current);`. In `case 'ERROR'`, add the same two lines. Add `case 'PONG': break;` to handle PONG (client sends PONG, server doesn't send PONG — no-op needed in case the naming is confused; the important direction is server→PING, client→PONG).",
+    "Step 10 — src/App.tsx (PING handler): Add `case 'PING': { socket.send(JSON.stringify({ type: 'PONG' })); break; }` to the onmessage switch. Note: use `socket` (the local variable in the onopen closure) not the `ws` state — same socket reference.",
+    "Step 11 — src/App.tsx (room_not_found ERROR handling): In `case 'ERROR'`, after calling `showError(msg.message)`, add: `if (msg.code === 'room_not_found') { sessionStorage.removeItem('rummi_current_room_id'); sessionStorage.removeItem('rummi_my_player_id'); setMyPlayerId(null); setGameState(null); }`",
+    "Step 12 — src/App.tsx (lastReceivedAtRef + 45s dead-socket detector): Add `const lastReceivedAtRef = useRef<number>(Date.now());`. In onmessage, at the very top, add `lastReceivedAtRef.current = Date.now();`. Add a useEffect with a 10s interval that checks `Date.now() - lastReceivedAtRef.current > 45000` and calls `connectWebSocket()` if true (and `!isExplicitlyLeavingRef.current`). Add `connectWebSocket` to the dependency array. Clean up the interval on unmount.",
+    "Step 13 — src/App.tsx (visibility + online resync): Add a useEffect that attaches `visibilitychange` on `document` and `online` on `window`. Both handlers: if socket is not OPEN and not explicitly leaving, call `connectWebSocket()`. Clean up listeners on unmount. Add `ws` and `connectWebSocket` to the dependency array.",
+    "Step 14 — src/App.tsx (connectWebSocket double-connection guard): At the top of `connectWebSocket`, add: `if (ws && ws.readyState === WebSocket.OPEN) return;` to prevent creating a second socket when one is already healthy.",
+    "Step 15 — src/App.tsx (rack integrity check in ROOM_STATE): After the localRack update logic in `case 'ROOM_STATE'`, add: scan `myPlayer?.rack` for tiles where `!t.isJoker && (typeof t.number !== 'number' || t.number < 1 || t.number > 13 || !t.color)`. If any found, log a warning and send RECONNECT_SESSION.",
+    "Step 16 — src/App.tsx (pass isDrawPending to GameControls): Add `isDrawPending={isDrawPending}` to the `<GameControls>` JSX.",
+    "Step 17 — src/components/GameControls.tsx (isDrawPending prop): Add `isDrawPending?: boolean` to `GameControlsProps`. Change draw button: `disabled={!isMyTurn || !!isDrawPending}`. Change label: `{isDrawPending ? 'שולף...' : `שלוף אריח מהקופה (${poolCount})`}`. Update the disabled className branch to also cover `isDrawPending`.",
+    "Step 18 — src/components/PlayerRack.tsx (remove isPlaceholder branch): Delete `const isPlaceholder = tile.id.startsWith('drawing_placeholder_');` and the `{isPlaceholder ? <FaceDownTile tileW={tW} tileH={tH} /> : <TileView ... />}` conditional — replace with just `<TileView ... />`. Remove the `FaceDownTile` import from './TileView' if it is now unused in this file.",
+    "Step 19 — scripts/testIdle.ts + package.json: Create scripts/testIdle.ts following the testPool.ts pattern (assert helper, labeled sections, process.exit on failure). Three scenarios: (1) idle 35s and expect PING around t=25s, (2) DRAW_TILE out of turn → expect ERROR, (3) DRAW_TILE for nonexistent room → expect ERROR with code='room_not_found'. Each scenario wraps in a Promise with 40s timeout. Reads PORT from process.env.PORT with fallback 3000. Add `\"test:idle\": \"npx tsx scripts/testIdle.ts\"` to package.json scripts."
+  ],
+  "acceptance_criteria": [
+    "npm run lint passes with no TypeScript errors",
+    "npm run typecheck:server passes with no TypeScript errors",
+    "npm run build completes successfully",
+    "Draw button shows 'שולף...' and is disabled immediately after clicking, until ROOM_STATE is received",
+    "No drawing_placeholder_ tile ever appears in the PlayerRack",
+    "DRAW_TILE message for a nonexistent room returns { type: 'ERROR', code: 'room_not_found' } (verified by test script)",
+    "DRAW_TILE message when it is not your turn returns { type: 'ERROR', code: 'not_your_turn' } (verified by test script)",
+    "Server sends { type: 'PING' } every ~25 seconds to all connected clients (verified by test script scenario 1)",
+    "npx tsx scripts/testIdle.ts — Test 2 and Test 3 print PASS after fix (requires server running)",
+    "Disconnecting tab and returning triggers reconnect (visibilitychange handler fires)",
+    "connectWebSocket does not create a second socket if one is already OPEN"
+  ],
+  "verification": [
+    "npm run lint",
+    "npm run typecheck:server",
+    "npm run build",
+    "npx tsx scripts/testIdle.ts (requires server running on localhost:3000)"
+  ],
+  "blocked_reason": null,
+  "findings": "All 19 steps implemented. Fixed two pre-existing TypeScript errors: (1) useFitTileSize.ts line 259 where setTileSize was passed {tileW,tileH} instead of {w,h}; (2) PlayerRack.tsx missing required mode:'rack' discriminant. Both errors originated in FEAT-001's useFitTileSize refactor. The FaceDownTile import was removed from PlayerRack (now unused). The Tile import was removed from App.tsx handleDrawTile (placeholder removed). connectWebSocket double-connect guard added. All checks pass: npm run lint, npm run typecheck:server, npm run build."
+}

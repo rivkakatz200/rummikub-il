@@ -256,7 +256,7 @@ export function useFitTileSize(
     if (isRack) {
       const { tileCount } = opts as RackOptions;
       const r = computeRackFit(cW, cH, tileCount, maxTileW, minTileW, gapRatio, paddingH, paddingV);
-      setTileSize(prev => (prev.w === r.tileW ? prev : r));
+      setTileSize(prev => (prev.w === r.tileW ? prev : { w: r.tileW, h: r.tileH }));
       setNeedsScroll(false);
       return;
     }

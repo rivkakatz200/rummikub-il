@@ -18,6 +18,7 @@ interface GameControlsProps {
   onFinishTurn: () => void;
   onDrawTile: () => void;
   onResetTurn: () => void;
+  isDrawPending?: boolean;
 }
 
 export const GameControls: React.FC<GameControlsProps> = ({
@@ -34,6 +35,7 @@ export const GameControls: React.FC<GameControlsProps> = ({
   onFinishTurn,
   onDrawTile,
   onResetTurn,
+  isDrawPending,
 }) => {
   const boardValidation = validateBoard(currentBoard);
   const playedTileCount = Math.max(0, initialRack.length - currentRack.length);
@@ -146,16 +148,16 @@ export const GameControls: React.FC<GameControlsProps> = ({
         {/* Draw tile button */}
         <button
           onClick={onDrawTile}
-          disabled={!isMyTurn}
+          disabled={!isMyTurn || !!isDrawPending}
           className={`py-1.5 px-3 rounded-lg font-bold text-xs flex items-center justify-center gap-1 transition shadow ${
-            isMyTurn
+            isMyTurn && !isDrawPending
               ? 'bg-sky-600 hover:bg-sky-500 text-white active:scale-95'
               : 'bg-stone-800 text-stone-500 cursor-not-allowed'
           }`}
           title="שלוף אריח מהקופה וסיים את התור"
         >
           <PlusCircle className="w-3.5 h-3.5" />
-          <span>שלוף אריח מהקופה ({poolCount})</span>
+          <span>{isDrawPending ? 'שולף...' : `שלוף אריח מהקופה (${poolCount})`}</span>
         </button>
 
         {/* Reset Turn Button */}
