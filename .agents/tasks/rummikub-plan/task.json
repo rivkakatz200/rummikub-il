@@ -1,0 +1,7 @@
+{
+  "task_id": "task-rummikub-plan",
+  "task_description": "Fix two bugs in the Hebrew RTL Rummikub app: (A) turquoise tile highlights show wrong tiles by replacing lastAction with recentActions[] + monotonic turn counter, (B) dead-socket placeholder tile persists by removing optimistic placeholder, adding isDrawPending state, explicit server errors, app-level PING heartbeat, and resync triggers.",
+  "status": "completed",
+  "feature_order": ["FEAT-001", "FEAT-002", "FEAT-003"],
+  "blocked_reason": null
+}
